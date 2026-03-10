@@ -1,0 +1,56 @@
+.onboarding-box {
+  max-width: 520px !important;
+}
+
+.interests-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.interests-label {
+  color: rgba(255, 255, 255, 0.6) !important;
+  font-size: 14px !important;
+}
+
+.interests-label span {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+}
+
+.interests-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.interest-btn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  color: white;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.interest-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.interest-btn.selected {
+  background: rgba(124, 106, 255, 0.25);
+  border-color: rgba(124, 106, 255, 0.6);
+  box-shadow: 0 0 12px rgba(124, 106, 255, 0.2);
+}
+
+@media (max-width: 480px) {
+  .onboarding-box {
+    padding: 32px 20px !important;
+  }
+  .interest-btn {
+    padding: 7px 11px;
+    font-size: 12px;
+  }
+}

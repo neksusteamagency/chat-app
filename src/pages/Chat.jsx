@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react'
 import { auth, db } from '../firebase'
-import { collection, onSnapshot, doc, updateDoc, query, where, orderBy  } from 'firebase/firestore'
+import { collection, onSnapshot, doc, query, where, orderBy, setDoc } from 'firebase/firestore'
 import Sidebar from '../components/Sidebar'
 import ChatWindow from '../components/ChatWindow'
 import '../styles/chat.css'
+import Discover from '../components/Discover'
 
-function Chat() {
-  const [users, setUsers] = useState([])
+function Chat({ userData }) {
+    const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
   const [unreadCounts, setUnreadCounts] = useState({})
   const [lastMessages, setLastMessages] = useState({})
   const currentUser = auth.currentUser
+  const [showDiscover, setShowDiscover] = useState(false)
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
@@ -20,10 +22,11 @@ function Chat() {
       setUsers(allUsers)
     })
 
-    updateDoc(doc(db, 'users', currentUser.uid), { online: true })
+    // Set user as online
+    setDoc(doc(db, 'users', currentUser.uid), { online: true }, { merge: true })
 
     const handleOffline = () => {
-      updateDoc(doc(db, 'users', currentUser.uid), { online: false })
+      setDoc(doc(db, 'users', currentUser.uid), { online: false }, { merge: true })
     }
     window.addEventListener('beforeunload', handleOffline)
 
@@ -33,15 +36,12 @@ function Chat() {
     }
   }, [])
 
-  // Track unread messages for each user
   useEffect(() => {
     const q = query(
       collection(db, 'messages'),
       where('receiverId', '==', currentUser.uid),
       where('read', '==', false)
     )
-
-    
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const counts = {}
@@ -55,53 +55,65 @@ function Chat() {
     return () => unsubscribe()
   }, [])
 
-useEffect(() => {
-  if (users.length === 0) return
+  useEffect(() => {
+    if (users.length === 0) return
 
-  const unsubscribes = users.map((user) => {
-    const chatId = [currentUser.uid, user.uid].sort().join('_')
-    const q = query(
-      collection(db, 'messages'),
-      where('chatId', '==', chatId),
-      orderBy('createdAt', 'desc')
-    )
+    const unsubscribes = users.map((user) => {
+      const chatId = [currentUser.uid, user.uid].sort().join('_')
+      const q = query(
+        collection(db, 'messages'),
+        where('chatId', '==', chatId),
+        orderBy('createdAt', 'desc')
+      )
 
-    return onSnapshot(q, (snapshot) => {
-      if (!snapshot.empty) {
-        const last = snapshot.docs[0].data()
-        setLastMessages((prev) => ({
-          ...prev,
-          [user.uid]: last
-        }))
-      } else {
-        setLastMessages((prev) => ({
-          ...prev,
-          [user.uid]: null
-        }))
-      }
+      return onSnapshot(q, (snapshot) => {
+        if (!snapshot.empty) {
+          const last = snapshot.docs[0].data()
+          setLastMessages((prev) => ({
+            ...prev,
+            [user.uid]: last
+          }))
+        } else {
+          setLastMessages((prev) => ({
+            ...prev,
+            [user.uid]: null
+          }))
+        }
+      })
     })
-  })
 
-  return () => unsubscribes.forEach((unsub) => unsub())
-}, [users])
+    return () => unsubscribes.forEach((unsub) => unsub())
+  }, [users])
 
-  return (
-    <div className="chat-container">
-      <Sidebar
+return (
+  <div className="chat-container">
+    <Sidebar
+      currentUser={currentUser}
+      userData={userData}
+      users={users}
+      selectedUser={selectedUser}
+      onSelectUser={(user) => { setSelectedUser(user) }}
+      unreadCounts={unreadCounts}
+      lastMessages={lastMessages}
+      onDiscoverOpen={() => setShowDiscover(true)}
+      className={selectedUser ? 'hidden' : ''}
+    />
+    <ChatWindow
+      currentUser={currentUser}
+      selectedUser={selectedUser}
+      onClose={() => setSelectedUser(null)}
+      className={selectedUser ? 'visible' : ''}
+    />
+    {showDiscover && (
+      <Discover
         currentUser={currentUser}
-        users={users}
-        selectedUser={selectedUser}
+        userData={userData}
         onSelectUser={setSelectedUser}
-        unreadCounts={unreadCounts}
-        lastMessages={lastMessages}
+        onClose={() => setShowDiscover(false)}
       />
-      <ChatWindow
-        currentUser={currentUser}
-        selectedUser={selectedUser}
-        onClose={() => setSelectedUser(null)}
-      />
-    </div>
-  )
+    )}
+  </div>
+)
 }
 
 export default Chat

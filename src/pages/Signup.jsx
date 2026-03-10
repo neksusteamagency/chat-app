@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import { auth, db } from '../firebase'
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'
+import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth'
 import { doc, setDoc } from 'firebase/firestore'
 import { useNavigate, Link } from 'react-router-dom'
 import '../styles/auth.css'
 
 function Signup() {
-  const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -15,20 +14,20 @@ function Signup() {
 
   const handleSignup = async () => {
     setError('')
-    if (name === '' || email === '' || password === '') return setError('All fields are required!')
+    if (email === '' || password === '') return setError('All fields are required!')
     if (password.length < 6) return setError('Password must be at least 6 characters!')
     setLoading(true)
     try {
       const result = await createUserWithEmailAndPassword(auth, email, password)
-      await updateProfile(result.user, { displayName: name })
+      await sendEmailVerification(result.user)
       await setDoc(doc(db, 'users', result.user.uid), {
         uid: result.user.uid,
-        name,
         email,
         createdAt: new Date(),
-        online: true
+        online: false,
+        onboarded: false
       })
-      navigate('/chat')
+      navigate('/verify-email')
     } catch (_) {
       setError('Email already in use!')
     }
@@ -45,15 +44,6 @@ function Signup() {
         </div>
         <div className="auth-form">
           {error && <div className="error-msg">{error}</div>}
-          <div className="input-group">
-            <span>👤</span>
-            <input
-              type="text"
-              placeholder="Full name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
           <div className="input-group">
             <span>📧</span>
             <input

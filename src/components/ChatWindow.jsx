@@ -8,8 +8,8 @@ import {
 import Message from './Message'
 import EmojiPicker from 'emoji-picker-react'
 
-function ChatWindow({ currentUser, selectedUser, onClose }) {
-  const [messages, setMessages] = useState([])
+function ChatWindow({ currentUser, selectedUser, onClose, className }) {
+    const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const bottomRef = useRef(null)
@@ -108,8 +108,8 @@ const handleEmojiClick = (emojiData) => {
   }
 
   return (
-    <div className="chat-window">
-      <div className="chat-header">
+<div className={`chat-window ${className || ''}`}>
+        <div className="chat-header">
         <div className="user-avatar-wrap">
           <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(selectedUser.name)}, #302b63)` }}>
             {getAvatar(selectedUser.name)}

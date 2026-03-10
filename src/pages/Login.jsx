@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { auth } from '../firebase'
-import { signInWithEmailAndPassword } from 'firebase/auth'
-import { useNavigate, Link } from 'react-router-dom'
+import { auth , db} from '../firebase'
+import { signInWithEmailAndPassword, reload } from 'firebase/auth'
+import { useNavigate, } from 'react-router-dom'
 import '../styles/auth.css'
+import { doc, getDoc } from 'firebase/firestore'
 
 function Login() {
   const [email, setEmail] = useState('')
@@ -11,17 +12,26 @@ function Login() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  const handleLogin = async () => {
-    setError('')
-    setLoading(true)
-    try {
-      await signInWithEmailAndPassword(auth, email, password)
-      navigate('/chat')
-    } catch (_) {
-      setError('Invalid email or password!')
+const handleLogin = async () => {
+  setError('')
+  setLoading(true)
+  try {
+    const result = await signInWithEmailAndPassword(auth, email, password)
+    await reload(result.user)
+    if (!result.user.emailVerified) {
+      await auth.signOut()
+      setError('Please verify your email first! Check your inbox.')
+      setLoading(false)
+      return
     }
-    setLoading(false)
+    const userDoc = await getDoc(doc(db, 'users', result.user.uid))
+    const isOnboarded = userDoc.exists() ? userDoc.data().onboarded : false
+    window.location.href = isOnboarded ? '/chat' : '/onboarding'
+  } catch (_) {
+    setError('Invalid email or password!')
   }
+  setLoading(false)
+}
 
   return (
     <div className="auth-container">
