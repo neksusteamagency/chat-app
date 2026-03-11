@@ -1,5 +1,4 @@
-import { auth, db } from '../firebase'
-import { signOut } from 'firebase/auth'
+import { db } from '../firebase'
 import { useState, useEffect } from 'react'
 import { doc, setDoc, collection, query, where, getDocs, onSnapshot, updateDoc, deleteDoc } from 'firebase/firestore'
 
@@ -72,10 +71,7 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
     await deleteDoc(doc(db, 'friends', request.id))
   }
 
-  const handleLogout = async () => {
-    await setDoc(doc(db, 'users', currentUser.uid), { online: false }, { merge: true })
-    await signOut(auth)
-  }
+
 
   const handleSearch = async (e) => {
     const value = e.target.value
@@ -118,7 +114,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
             )}
           </button>
 
-          <button className="logout-btn" onClick={handleLogout}>Logout</button>
         </div>
       </div>
 

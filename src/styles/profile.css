@@ -423,3 +423,73 @@
   .bg-grid { grid-template-columns: repeat(2, 1fr); }
   .about-links { flex-direction: column; }
 }
+
+
+.profile-meta {
+  display: flex;
+  gap: 16px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+}
+
+.step-counter {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+  text-align: right;
+}
+
+.country-select {
+  width: 100%;
+  padding: 14px 18px 14px 44px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  color: white;
+  font-size: 15px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+}
+
+.country-select option {
+  background: #1a1a2e;
+  color: white;
+}
+
+.country-select:focus {
+  border-color: #7c6aff;
+  background: rgba(124, 106, 255, 0.1);
+}
+
+
+.profile-bio {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+  text-align: center;
+  font-style: italic;
+  max-width: 320px;
+}
+
+.bio-counter {
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 11px;
+  text-align: right;
+  margin-top: -8px;
+}
+
+.logout-btn-settings {
+  width: 100%;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.logout-btn-settings:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
