@@ -3,8 +3,9 @@ import { signOut } from 'firebase/auth'
 import { useState, useEffect } from 'react'
 import { doc, setDoc, collection, query, where, getDocs, onSnapshot, updateDoc, deleteDoc } from 'firebase/firestore'
 
-function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unreadCounts, lastMessages, onDiscoverOpen, className }) {
-  const [search, setSearch] = useState('')
+// At the top of the component, add pinnedChats and onPinChat to props:
+function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unreadCounts, lastMessages, onDiscoverOpen, className, pinnedChats, onPinChat }) {
+    const [search, setSearch] = useState('')
   const [searchResult, setSearchResult] = useState(null)
   const [notFound, setNotFound] = useState(false)
   const [friends, setFriends] = useState([])
@@ -194,46 +195,85 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
         {notFound && <p className="not-found">No user found with that App ID!</p>}
 
         {/* Friends list */}
-        {!searchResult && !notFound && (
-          <>
-            <h3>Friends {friendUsers.length > 0 ? `(${friendUsers.length})` : ''}</h3>
-            {filteredFriends.length === 0 ? (
-              <div className="no-friends">
-                <p>💬</p>
-                <p>No friends yet!</p>
-                <p>Use 🌍 Discover or search by #AppID</p>
-              </div>
-            ) : (
-              filteredFriends.map((user) => (
-                <div
-                  key={user.uid}
-                  className={`user-item ${selectedUser?.uid === user.uid ? 'active' : ''}`}
-                  onClick={() => onSelectUser(user)}
-                >
-                  <div className="user-avatar-wrap">
-                    <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(user.displayUsername)}, #302b63)` }}>
-                      {getAvatar(user.displayUsername)}
-                    </div>
-                    {user.online && <div className="online-dot" />}
-                  </div>
-                  <div className="user-info">
-                    <h4>{user.displayUsername}</h4>
-                    <p className="last-message">
-                      {lastMessages[user.uid]
-                        ? lastMessages[user.uid].senderId === currentUser.uid
-                          ? `You: ${lastMessages[user.uid].text}`
-                          : lastMessages[user.uid].text
-                        : user.online ? 'Online' : 'Offline'}
-                    </p>
-                  </div>
-                  {unreadCounts[user.uid] > 0 && (
-                    <div className="badge">{unreadCounts[user.uid]}</div>
-                  )}
+{!searchResult && !notFound && (
+  <>
+    {/* Pinned chats */}
+    {pinnedChats.length > 0 && (
+      <>
+        <h3>📌 Pinned</h3>
+        {users
+          .filter((u) => pinnedChats.includes(u.uid))
+          .map((user) => (
+            <div
+              key={user.uid}
+              className={`user-item ${selectedUser?.uid === user.uid ? 'active' : ''}`}
+              onClick={() => onSelectUser(user)}
+            >
+              <div className="user-avatar-wrap">
+                <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(user.displayUsername)}, #302b63)` }}>
+                  {getAvatar(user.displayUsername)}
                 </div>
-              ))
+                {user.online && <div className="online-dot" />}
+              </div>
+              <div className="user-info">
+                <h4>{user.displayUsername}</h4>
+                <p className="last-message">
+                  {lastMessages[user.uid]
+                    ? lastMessages[user.uid].senderId === currentUser.uid
+                      ? `You: ${lastMessages[user.uid].text}`
+                      : lastMessages[user.uid].text
+                    : user.online ? 'Online' : 'Offline'}
+                </p>
+              </div>
+              {unreadCounts[user.uid] > 0 && (
+                <div className="badge">{unreadCounts[user.uid]}</div>
+              )}
+            </div>
+          ))}
+      </>
+    )}
+
+    {/* Friends list */}
+    <h3>Friends {friendUsers.length > 0 ? `(${friendUsers.length})` : ''}</h3>
+    {filteredFriends.length === 0 ? (
+      <div className="no-friends">
+        <p>💬</p>
+        <p>No friends yet!</p>
+        <p>Use 🌍 Discover or search by #AppID</p>
+      </div>
+    ) : (
+      filteredFriends
+        .filter((u) => !pinnedChats.includes(u.uid))
+        .map((user) => (
+          <div
+            key={user.uid}
+            className={`user-item ${selectedUser?.uid === user.uid ? 'active' : ''}`}
+            onClick={() => onSelectUser(user)}
+          >
+            <div className="user-avatar-wrap">
+              <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(user.displayUsername)}, #302b63)` }}>
+                {getAvatar(user.displayUsername)}
+              </div>
+              {user.online && <div className="online-dot" />}
+            </div>
+            <div className="user-info">
+              <h4>{user.displayUsername}</h4>
+              <p className="last-message">
+                {lastMessages[user.uid]
+                  ? lastMessages[user.uid].senderId === currentUser.uid
+                    ? `You: ${lastMessages[user.uid].text}`
+                    : lastMessages[user.uid].text
+                  : user.online ? 'Online' : 'Offline'}
+              </p>
+            </div>
+            {unreadCounts[user.uid] > 0 && (
+              <div className="badge">{unreadCounts[user.uid]}</div>
             )}
-          </>
-        )}
+          </div>
+        ))
+    )}
+  </>
+)}
       </div>
     </div>
   )

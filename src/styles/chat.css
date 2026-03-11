@@ -188,6 +188,7 @@
   flex-direction: column;
   height: 100vh;
   background: rgba(0, 0, 0, 0.15);
+  position: relative;
 }
 
 .chat-header {
@@ -198,6 +199,8 @@
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   backdrop-filter: blur(10px);
+    z-index: 50;
+  position: relative;
 }
 
 .chat-header .avatar {
@@ -1234,4 +1237,174 @@
 
 .no-friends p:first-child {
   font-size: 32px;
+}
+
+.chat-menu-wrap {
+  position: relative;
+}
+
+.menu-btn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.menu-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.chat-menu {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  background: rgba(20, 20, 45, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 6px;
+  min-width: 160px;
+  z-index: 999;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  animation: popIn 0.2s ease;
+}
+
+.chat-menu button {
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.chat-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+}
+
+.danger-menu-item {
+  color: #ff6b6b !important;
+}
+
+.danger-menu-item:hover {
+  background: rgba(255, 80, 80, 0.12) !important;
+}
+
+
+/* ---- CONFIRM DIALOG ---- */
+.confirm-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 200;
+  animation: fadeIn 0.2s ease;
+}
+
+.confirm-box {
+  background: rgba(20, 20, 45, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 28px 24px;
+  width: 90%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: slideUp 0.3s ease;
+}
+
+.confirm-box h3 {
+  color: white;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.confirm-box p {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.confirm-cancel {
+  flex: 1;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.confirm-cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.confirm-delete {
+  flex: 1;
+  padding: 12px;
+  background: rgba(255, 80, 80, 0.15);
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  border-radius: 12px;
+  color: #ff6b6b;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.confirm-delete:hover {
+  background: rgba(255, 80, 80, 0.25);
+}
+
+
+.report-toast {
+  position: absolute;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 167, 38, 0.15);
+  border: 1px solid rgba(255, 167, 38, 0.3);
+  color: #ffa726;
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-size: 14px;
+  white-space: nowrap;
+  animation: slideUp 0.3s ease;
+  z-index: 100;
+}
+
+.deleted-bubble {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px dashed rgba(255, 255, 255, 0.15) !important;
+  color: rgba(255, 255, 255, 0.3) !important;
+  font-style: italic;
+  font-size: 13px !important;
+  box-shadow: none !important;
 }

@@ -3,18 +3,22 @@ import { db } from '../firebase'
 import {
   collection, addDoc, query, orderBy,
   onSnapshot, serverTimestamp, where,
-  updateDoc, doc, setDoc, getDoc
+  updateDoc, doc, setDoc, getDocs, deleteDoc, getDoc
 } from 'firebase/firestore'
 import Message from './Message'
 import EmojiPicker from 'emoji-picker-react'
 
-function ChatWindow({ currentUser, selectedUser, onClose, className }) {
+function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser, pinnedChats, onPinChat }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
-  const [friendStatus, setFriendStatus] = useState('none') // none | pending | friends
+  const [friendStatus, setFriendStatus] = useState('none')
   const [friendLoading, setFriendLoading] = useState(false)
+  const [showMenu, setShowMenu] = useState(false)
+  const [deletedAt, setDeletedAt] = useState(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [reportSuccess, setReportSuccess] = useState(false)
   const bottomRef = useRef(null)
   const typingTimeout = useRef(null)
 
@@ -26,14 +30,35 @@ function ChatWindow({ currentUser, selectedUser, onClose, className }) {
   useEffect(() => {
     if (!selectedUser) return
     const checkFriendStatus = async () => {
-      const friendDoc = await getDoc(doc(db, 'friends', `${currentUser.uid}_${selectedUser.uid}`))
-      if (friendDoc.exists()) {
-        setFriendStatus(friendDoc.data().status) // 'pending' or 'accepted'
-      } else {
+      const [snap1, snap2] = await Promise.all([
+        getDocs(query(collection(db, 'friends'), where('senderId', '==', currentUser.uid), where('receiverId', '==', selectedUser.uid))),
+        getDocs(query(collection(db, 'friends'), where('senderId', '==', selectedUser.uid), where('receiverId', '==', currentUser.uid)))
+      ])
+      const all = [...snap1.docs, ...snap2.docs]
+      if (all.length === 0) {
         setFriendStatus('none')
+      } else {
+        const accepted = all.find((d) => d.data().status === 'accepted')
+        setFriendStatus(accepted ? 'accepted' : 'pending')
       }
     }
     checkFriendStatus()
+  }, [selectedUser])
+
+  // Load deletedAt timestamp for this chat
+  useEffect(() => {
+    if (!selectedUser) return
+    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+    const loadDeletedAt = async () => {
+      const snap = await getDoc(doc(db, 'deletedChats', `${currentUser.uid}_${chatId}`))
+      if (snap.exists()) {
+        const raw = snap.data().deletedAt
+        setDeletedAt(raw?.toDate ? raw.toDate() : new Date(raw))
+      } else {
+        setDeletedAt(null)
+      }
+    }
+    loadDeletedAt()
   }, [selectedUser])
 
   // Messages listener
@@ -46,7 +71,15 @@ function ChatWindow({ currentUser, selectedUser, onClose, className }) {
       orderBy('createdAt', 'asc')
     )
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      setMessages(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })))
+      const allMessages = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+      const filtered = deletedAt
+        ? allMessages.filter((m) => {
+            const msgDate = m.createdAt?.toDate ? m.createdAt.toDate() : new Date(m.createdAt)
+            return msgDate > deletedAt
+          })
+        : allMessages
+      setMessages(filtered)
+
       const unreadMessages = snapshot.docs.filter(
         (d) => d.data().read === false && d.data().senderId === selectedUser.uid
       )
@@ -55,18 +88,14 @@ function ChatWindow({ currentUser, selectedUser, onClose, className }) {
       })
     })
     return () => unsubscribe()
-  }, [selectedUser])
+  }, [selectedUser, deletedAt])
 
   // Typing listener
   useEffect(() => {
     if (!selectedUser) return
     const typingRef = doc(db, 'typing', `${selectedUser.uid}_${currentUser.uid}`)
     const unsubscribe = onSnapshot(typingRef, (snapshot) => {
-      if (snapshot.exists()) {
-        setIsTyping(snapshot.data().typing)
-      } else {
-        setIsTyping(false)
-      }
+      setIsTyping(snapshot.exists() ? snapshot.data().typing : false)
     })
     return () => unsubscribe()
   }, [selectedUser])
@@ -104,14 +133,12 @@ function ChatWindow({ currentUser, selectedUser, onClose, className }) {
   const handleAddFriend = async () => {
     setFriendLoading(true)
     try {
-      // Create friend request doc (sender -> receiver)
       await setDoc(doc(db, 'friends', `${currentUser.uid}_${selectedUser.uid}`), {
         senderId: currentUser.uid,
         receiverId: selectedUser.uid,
         status: 'pending',
         createdAt: serverTimestamp(),
       })
-      // Create notification for receiver
       await addDoc(collection(db, 'notifications'), {
         type: 'friend_request',
         fromUid: currentUser.uid,
@@ -122,6 +149,43 @@ function ChatWindow({ currentUser, selectedUser, onClose, className }) {
       setFriendStatus('pending')
     } catch (_) {}
     setFriendLoading(false)
+  }
+
+  const handleUnfriend = async () => {
+    try {
+      const q1 = query(collection(db, 'friends'), where('senderId', '==', currentUser.uid), where('receiverId', '==', selectedUser.uid))
+      const q2 = query(collection(db, 'friends'), where('senderId', '==', selectedUser.uid), where('receiverId', '==', currentUser.uid))
+      const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)])
+      snap1.forEach(async (d) => await deleteDoc(doc(db, 'friends', d.id)))
+      snap2.forEach(async (d) => await deleteDoc(doc(db, 'friends', d.id)))
+      onClose()
+    } catch (_) {}
+  }
+
+  const handleReport = async () => {
+    try {
+      await addDoc(collection(db, 'reports'), {
+        reporterId: currentUser.uid,
+        reportedId: selectedUser.uid,
+        createdAt: serverTimestamp(),
+      })
+      setReportSuccess(true)
+      setTimeout(() => setReportSuccess(false), 3000)
+    } catch (_) {}
+  }
+
+  const handleDeleteChat = async () => {
+    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+    const now = new Date()
+    await setDoc(doc(db, 'deletedChats', `${currentUser.uid}_${chatId}`), {
+      deletedAt: now,
+      userId: currentUser.uid,
+      chatId,
+    })
+    setDeletedAt(now)
+    setMessages([])
+    setShowDeleteConfirm(false)
+    setShowMenu(false)
   }
 
   const getFriendBtn = () => {
@@ -164,6 +228,28 @@ function ChatWindow({ currentUser, selectedUser, onClose, className }) {
         </div>
         <div className="chat-header-actions">
           {getFriendBtn()}
+          <div className="chat-menu-wrap">
+            <button className="menu-btn" onClick={() => setShowMenu(!showMenu)}>⋮</button>
+            {showMenu && (
+              <div className="chat-menu">
+                <button onClick={() => { onPinChat && onPinChat(selectedUser.uid); setShowMenu(false) }}>
+                  📌 {pinnedChats?.includes(selectedUser.uid) ? 'Unpin Chat' : 'Pin Chat'}
+                </button>
+                <button onClick={() => { handleUnfriend(); setShowMenu(false) }}>
+                  💔 Unfriend
+                </button>
+                <button onClick={() => { setShowDeleteConfirm(true); setShowMenu(false) }}>
+                  🗑️ Delete Chat
+                </button>
+                <button onClick={() => { handleReport(); setShowMenu(false) }}>
+                  🚩 Report
+                </button>
+                <button className="danger-menu-item" onClick={() => { onBlockUser(selectedUser.uid); setShowMenu(false) }}>
+                  🚫 Block
+                </button>
+              </div>
+            )}
+          </div>
           <button className="close-chat-btn" onClick={() => onClose()}>✕</button>
         </div>
       </div>
@@ -208,6 +294,23 @@ function ChatWindow({ currentUser, selectedUser, onClose, className }) {
         />
         <button className="send-btn" onClick={() => { sendMessage(); setShowEmojiPicker(false) }}>➤</button>
       </div>
+
+      {reportSuccess && (
+        <div className="report-toast">🚩 User reported successfully!</div>
+      )}
+
+      {showDeleteConfirm && (
+        <div className="confirm-overlay">
+          <div className="confirm-box">
+            <h3>🗑️ Delete Chat</h3>
+            <p>This will clear the chat history only for you. The other person will still see it.</p>
+            <div className="confirm-actions">
+              <button className="confirm-cancel" onClick={() => setShowDeleteConfirm(false)}>Cancel</button>
+              <button className="confirm-delete" onClick={handleDeleteChat}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

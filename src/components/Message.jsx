@@ -17,20 +17,16 @@ function Message({ message, currentUser }) {
   }
 
   const deleteMessage = async () => {
-    await deleteDoc(doc(db, 'messages', message.id))
+    await updateDoc(doc(db, 'messages', message.id), { deleted: true, text: '' })
   }
 
   const handleReaction = async (emoji) => {
+    if (message.deleted) return
     const reactions = message.reactions || {}
     const users = reactions[emoji] || []
-
-    let updatedUsers
-    if (users.includes(currentUser.uid)) {
-      updatedUsers = users.filter((uid) => uid !== currentUser.uid)
-    } else {
-      updatedUsers = [...users, currentUser.uid]
-    }
-
+    const updatedUsers = users.includes(currentUser.uid)
+      ? users.filter((uid) => uid !== currentUser.uid)
+      : [...users, currentUser.uid]
     const updatedReactions = { ...reactions, [emoji]: updatedUsers }
     await updateDoc(doc(db, 'messages', message.id), { reactions: updatedReactions })
     setShowReactions(false)
@@ -39,16 +35,25 @@ function Message({ message, currentUser }) {
   const handleEdit = async () => {
     if (editText.trim() === '') return
     if (editText === message.text) { setIsEditing(false); return }
-    await updateDoc(doc(db, 'messages', message.id), {
-      text: editText,
-      edited: true
-    })
+    await updateDoc(doc(db, 'messages', message.id), { text: editText, edited: true })
     setIsEditing(false)
   }
 
   const getReactionSummary = () => {
     const reactions = message.reactions || {}
     return Object.entries(reactions).filter(([_, users]) => users.length > 0)
+  }
+
+  // Deleted message
+  if (message.deleted) {
+    return (
+      <div className={`message-row ${isSent ? 'sent' : 'received'}`}>
+        <div className="message-bubble deleted-bubble">
+          🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}
+        </div>
+        <span className="message-time">{formatTime(message.createdAt)}</span>
+      </div>
+    )
   }
 
   return (
