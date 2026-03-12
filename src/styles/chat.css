@@ -1772,3 +1772,51 @@ body[data-theme="light"] .not-found { color: rgba(0, 0, 0, 0.35); }
 .report-other-input::placeholder {
   color: rgba(255, 255, 255, 0.25);
 }
+
+
+.sidebar-tabs {
+  display: flex;
+  padding: 8px 12px;
+  gap: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 8px 4px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.sidebar-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.sidebar-tab.active {
+  background: rgba(124, 106, 255, 0.15);
+  color: #a89aff;
+}
+
+.tab-badge {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  background: #ff6b6b;
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

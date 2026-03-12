@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { db } from '../firebase'
-import { collection, query, where, getDocs } from 'firebase/firestore'
+import { collection, query, where, getDocs, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore'
 
 const AGE_RANGES = [
   { label: 'Any age', min: 0, max: 999 },
@@ -16,6 +16,8 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
   const [notFound, setNotFound] = useState(false)
   const [skipped, setSkipped] = useState([])
   const [showFilters, setShowFilters] = useState(true)
+  const [requestSent, setRequestSent] = useState(false)
+  const [requestLoading, setRequestLoading] = useState(false)
 
   const [locationFilter, setLocationFilter] = useState('worldwide')
   const [languageFilter, setLanguageFilter] = useState('any')
@@ -29,6 +31,7 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
     setLoading(true)
     setNotFound(false)
     setMatch(null)
+    setRequestSent(false)
     setShowFilters(false)
 
     try {
@@ -45,24 +48,20 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
           if (skipped.includes(u.uid)) return false
           if (!u.onboarded) return false
 
-          // Language filter
           if (languageFilter !== 'any') {
             const theirLangs = u.languages || []
             if (!theirLangs.includes(languageFilter)) return false
           } else {
-            // At least 1 shared language
             const myLangs = userData?.languages || []
             const theirLangs = u.languages || []
             const sharedLangs = myLangs.filter((l) => theirLangs.includes(l))
             if (sharedLangs.length === 0) return false
           }
 
-          // Location filter
           if (locationFilter === 'country') {
             if (u.country !== userData?.country) return false
           }
 
-          // Age filter
           const theirAge = u.age || 0
           if (theirAge < ageRange.min || theirAge > ageRange.max) return false
 
@@ -73,7 +72,20 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
         setNotFound(true)
       } else {
         const random = results[Math.floor(Math.random() * results.length)]
-        setMatch(random)
+
+        // Check if already friends
+        const [snap1, snap2] = await Promise.all([
+          getDocs(query(collection(db, 'friends'), where('senderId', '==', currentUser.uid), where('receiverId', '==', random.uid), where('status', '==', 'accepted'))),
+          getDocs(query(collection(db, 'friends'), where('senderId', '==', random.uid), where('receiverId', '==', currentUser.uid), where('status', '==', 'accepted')))
+        ])
+        const alreadyFriends = !snap1.empty || !snap2.empty
+
+        // Check if message request already sent
+        const reqSnap = await getDocs(query(collection(db, 'messageRequests'), where('fromUid', '==', currentUser.uid), where('toUid', '==', random.uid)))
+        const requestAlreadySent = !reqSnap.empty
+
+        setMatch({ ...random, alreadyFriends, requestAlreadySent })
+        if (requestAlreadySent) setRequestSent(true)
       }
     } catch (_) {
       setNotFound(true)
@@ -85,15 +97,34 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
     if (match) {
       setSkipped([...skipped, match.uid])
       setMatch(null)
+      setRequestSent(false)
       findMatch()
     }
   }
 
-  const handleChat = () => {
-    if (match) {
+  const handleChat = async () => {
+    if (!match) return
+
+    // If already friends, open chat directly
+    if (match.alreadyFriends) {
       onSelectUser(match)
       onClose()
+      return
     }
+
+    // Send message request
+    setRequestLoading(true)
+    try {
+      await addDoc(collection(db, 'messageRequests'), {
+        fromUid: currentUser.uid,
+        fromUsername: userData?.displayUsername,
+        toUid: match.uid,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+      })
+      setRequestSent(true)
+    } catch (_) {}
+    setRequestLoading(false)
   }
 
   const handleReset = () => {
@@ -101,9 +132,9 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
     setNotFound(false)
     setShowFilters(true)
     setSkipped([])
+    setRequestSent(false)
   }
 
-  // Shared languages between me and match
   const sharedLanguages = match
     ? (userData?.languages || []).filter((l) => (match.languages || []).includes(l))
     : []
@@ -123,9 +154,7 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
         {showFilters && (
           <>
             <p className="discover-subtitle">Find people who match your vibe!</p>
-
             <div className="discover-filters">
-
               <div className="filter-group">
                 <label>📍 Location</label>
                 <div className="filter-options">
@@ -179,7 +208,6 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
                   ))}
                 </div>
               </div>
-
             </div>
 
             <button className="find-btn" onClick={findMatch}>
@@ -241,7 +269,15 @@ function Discover({ currentUser, userData, onSelectUser, onClose }) {
 
             <div className="match-actions">
               <button className="skip-btn" onClick={handleSkip}>⏭️ Skip</button>
-              <button className="chat-btn" onClick={handleChat}>💬 Chat</button>
+              {match.alreadyFriends ? (
+                <button className="chat-btn" onClick={handleChat}>💬 Chat</button>
+              ) : requestSent ? (
+                <button className="chat-btn" disabled style={{ opacity: 0.6 }}>✅ Request Sent</button>
+              ) : (
+                <button className="chat-btn" onClick={handleChat} disabled={requestLoading}>
+                  {requestLoading ? '...' : '💬 Send Request'}
+                </button>
+              )}
             </div>
             <button className="change-filters-btn" onClick={handleReset}>⚙️ Change Filters</button>
           </div>
