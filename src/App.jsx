@@ -15,7 +15,7 @@ function App() {
   const [user, setUser] = useState(null)
   const [userData, setUserData] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [showSplash, setShowSplash] = useState(true)
+const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('splashShown'))
   const [onboarded, setOnboarded] = useState(false)
 
   const handleUpdateUserData = (newData) => {
@@ -42,9 +42,12 @@ function App() {
     return () => unsubscribe()
   }, [])
 
-  useEffect(() => {
+useEffect(() => {
+  if (showSplash) {
+    sessionStorage.setItem('splashShown', 'true')
     setTimeout(() => setShowSplash(false), 2500)
-  }, [])
+  }
+}, [])
 
   useEffect(() => {
   if (user && user.emailVerified && userData) {

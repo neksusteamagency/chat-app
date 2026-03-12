@@ -1,41 +1,57 @@
 import { useState, useEffect, useRef } from 'react'
 import { db, messaging, onMessage } from '../firebase'
 import {
-  collection, addDoc, query, orderBy,
+  collection, addDoc, query, orderBy, limit,
   onSnapshot, serverTimestamp, where,
-  updateDoc, doc, setDoc, getDocs, deleteDoc, getDoc
+  updateDoc, doc, setDoc, getDocs, deleteDoc, getDoc,
+  getDocs as getDocsOnce, startAfter, limitToLast
 } from 'firebase/firestore'
 import Message from './Message'
 import EmojiPicker from 'emoji-picker-react'
 
+const PAGE_SIZE = 30
+
 function ChatWindow({ currentUser, userData, selectedUser, onClose, className, onBlockUser, pinnedChats, onPinChat }) {
-    const [messages, setMessages] = useState([])
+  const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
-  const [friendStatus, setFriendStatus] = useState('none')
+  const [friendStatus, setFriendStatus] = useState(null)
   const [friendLoading, setFriendLoading] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
   const [deletedAt, setDeletedAt] = useState(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [reportSuccess, setReportSuccess] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
-  const bottomRef = useRef(null)
-  const typingTimeout = useRef(null)
   const [showBlockConfirm, setShowBlockConfirm] = useState(false)
+  const [showReportDialog, setShowReportDialog] = useState(false)
+  const [reportReason, setReportReason] = useState('')
+  const [reportOther, setReportOther] = useState('')
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [firstDoc, setFirstDoc] = useState(null)
+
+  const bottomRef = useRef(null)
+  const topRef = useRef(null)
+  const typingTimeout = useRef(null)
+  const isInitialLoad = useRef(true)
+  const messagesContainerRef = useRef(null)
 
   const getAvatar = (name) => name?.charAt(0).toUpperCase()
   const colors = ['#7c6aff', '#ff6b9d', '#4ecdc4', '#ffa726', '#66bb6a', '#ef5350']
   const getColor = (name) => colors[name?.charCodeAt(0) % colors.length]
 
-  // Shared interests & languages
   const sharedInterests = (currentUser?.interests || []).filter(i => selectedUser?.interests?.includes(i))
   const sharedLanguages = (currentUser?.languages || []).filter(l => selectedUser?.languages?.includes(l))
 
+  // Reset on user change
+  useEffect(() => {
+    isInitialLoad.current = true
+    setMessages([])
+    setFirstDoc(null)
+    setHasMore(false)
+  }, [selectedUser])
 
-  const [showReportDialog, setShowReportDialog] = useState(false)
-const [reportReason, setReportReason] = useState('')
-const [reportOther, setReportOther] = useState('')
   // Check friend status
   useEffect(() => {
     if (!selectedUser) return
@@ -55,20 +71,18 @@ const [reportOther, setReportOther] = useState('')
     checkFriendStatus()
   }, [selectedUser])
 
+  // Foreground notifications
   useEffect(() => {
-  const unsubscribe = onMessage(messaging, (payload) => {
-    const { title, body } = payload.notification
-    if (Notification.permission === 'granted') {
-      new Notification(title, {
-        body,
-        icon: '/pwa-192x192.png',
-      })
-    }
-  })
-  return () => unsubscribe()
-}, [])
+    const unsubscribe = onMessage(messaging, (payload) => {
+      const { title, body } = payload.notification
+      if (Notification.permission === 'granted') {
+        new Notification(title, { body, icon: '/pwa-192x192.png' })
+      }
+    })
+    return () => unsubscribe()
+  }, [])
 
-  // Load deletedAt timestamp for this chat
+  // Load deletedAt
   useEffect(() => {
     if (!selectedUser) return
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
@@ -84,14 +98,15 @@ const [reportOther, setReportOther] = useState('')
     loadDeletedAt()
   }, [selectedUser])
 
-  // Messages listener
+  // Messages listener — last PAGE_SIZE messages, real-time
   useEffect(() => {
     if (!selectedUser) return
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
     const q = query(
       collection(db, 'messages'),
       where('chatId', '==', chatId),
-      orderBy('createdAt', 'asc')
+      orderBy('createdAt', 'asc'),
+      limitToLast(PAGE_SIZE)
     )
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const allMessages = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
@@ -101,17 +116,72 @@ const [reportOther, setReportOther] = useState('')
             return msgDate > deletedAt
           })
         : allMessages
-      setMessages(filtered)
 
-      const unreadMessages = snapshot.docs.filter(
-        (d) => d.data().read === false && d.data().senderId === selectedUser.uid
-      )
-      unreadMessages.forEach(async (message) => {
-        await updateDoc(doc(db, 'messages', message.id), { read: true })
-      })
+      setMessages(filtered)
+      if (snapshot.docs.length >= PAGE_SIZE) {
+        setHasMore(true)
+        setFirstDoc(snapshot.docs[0])
+      } else {
+        setHasMore(false)
+      }
+
+      // Mark as read
+      snapshot.docs
+        .filter((d) => d.data().read === false && d.data().senderId === selectedUser.uid)
+        .forEach(async (message) => {
+          await updateDoc(doc(db, 'messages', message.id), { read: true })
+        })
     })
     return () => unsubscribe()
   }, [selectedUser, deletedAt])
+
+  // Load older messages
+  const loadMoreMessages = async () => {
+    if (!firstDoc || loadingMore) return
+    setLoadingMore(true)
+    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+    const q = query(
+      collection(db, 'messages'),
+      where('chatId', '==', chatId),
+      orderBy('createdAt', 'asc'),
+      limitToLast(PAGE_SIZE),
+      startAfter(firstDoc) // going backwards
+    )
+
+    // Save scroll position before loading
+    const container = messagesContainerRef.current
+    const prevScrollHeight = container?.scrollHeight || 0
+
+    const snapshot = await getDocs(q)
+    if (snapshot.empty) {
+      setHasMore(false)
+      setLoadingMore(false)
+      return
+    }
+
+    const older = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+    setMessages((prev) => [...older, ...prev])
+    setFirstDoc(snapshot.docs[0])
+    if (snapshot.docs.length < PAGE_SIZE) setHasMore(false)
+
+    // Restore scroll position
+    requestAnimationFrame(() => {
+      if (container) {
+        container.scrollTop = container.scrollHeight - prevScrollHeight
+      }
+    })
+
+    setLoadingMore(false)
+  }
+
+  // Scroll handler — load more when near top
+  const handleScroll = () => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    if (container.scrollTop < 50 && hasMore && !loadingMore) {
+      loadMoreMessages()
+    }
+  }
 
   // Typing listener
   useEffect(() => {
@@ -123,9 +193,14 @@ const [reportOther, setReportOther] = useState('')
     return () => unsubscribe()
   }, [selectedUser])
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  // Scroll to bottom
+useEffect(() => {
+  if (messages.length === 0) return
+  if (isInitialLoad.current) {
+    bottomRef.current?.scrollIntoView({ behavior: 'instant' })
+    isInitialLoad.current = false
+  }
+}, [messages])
 
   const handleTyping = (e) => {
     setInput(e.target.value)
@@ -137,33 +212,30 @@ const [reportOther, setReportOther] = useState('')
     }, 1500)
   }
 
-const sendMessage = async () => {
-  if (input.trim() === '') return
-  const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
-  await addDoc(collection(db, 'messages'), {
-    chatId,
-    text: input,
-    senderId: currentUser.uid,
-    receiverId: selectedUser.uid,
-    createdAt: serverTimestamp(),
-    read: false
-  })
-
-  // Save notification for receiver
-  await addDoc(collection(db, 'notifications'), {
-    type: 'new_message',
-    fromUid: currentUser.uid,
-    fromUsername: userData?.displayUsername || '',
-    toUid: selectedUser.uid,
-    message: input.length > 50 ? input.substring(0, 50) + '...' : input,
-    read: false,
-    createdAt: serverTimestamp(),
-  })
-
-  setInput('')
-  const typingRef = doc(db, 'typing', `${currentUser.uid}_${selectedUser.uid}`)
-  setDoc(typingRef, { typing: false })
-}
+  const sendMessage = async () => {
+    if (input.trim() === '') return
+    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+    await addDoc(collection(db, 'messages'), {
+      chatId,
+      text: input,
+      senderId: currentUser.uid,
+      receiverId: selectedUser.uid,
+      createdAt: serverTimestamp(),
+      read: false
+    })
+    await addDoc(collection(db, 'notifications'), {
+      type: 'new_message',
+      fromUid: currentUser.uid,
+      fromUsername: userData?.displayUsername || '',
+      toUid: selectedUser.uid,
+      message: input.length > 50 ? input.substring(0, 50) + '...' : input,
+      read: false,
+      createdAt: serverTimestamp(),
+    })
+    setInput('')
+    const typingRef = doc(db, 'typing', `${currentUser.uid}_${selectedUser.uid}`)
+    setDoc(typingRef, { typing: false })
+  }
 
   const handleAddFriend = async () => {
     setFriendLoading(true)
@@ -197,26 +269,26 @@ const sendMessage = async () => {
     } catch (_) {}
   }
 
-const handleReport = async () => {
-  if (!reportReason) return
-  try {
-    await addDoc(collection(db, 'reports'), {
-      reporterId: currentUser.uid,
-      reporterUsername: currentUser.displayName || '',
-      reportedId: selectedUser.uid,
-      reportedUsername: selectedUser.displayUsername,
-      reason: reportReason,
-      details: reportReason === 'Other' ? reportOther.trim() : '',
-      createdAt: serverTimestamp(),
-      status: 'pending',
-    })
-    setReportSuccess(true)
-    setShowReportDialog(false)
-    setReportReason('')
-    setReportOther('')
-    setTimeout(() => setReportSuccess(false), 3000)
-  } catch (_) {}
-}
+  const handleReport = async () => {
+    if (!reportReason) return
+    try {
+      await addDoc(collection(db, 'reports'), {
+        reporterId: currentUser.uid,
+        reporterUsername: currentUser.displayName || '',
+        reportedId: selectedUser.uid,
+        reportedUsername: selectedUser.displayUsername,
+        reason: reportReason,
+        details: reportReason === 'Other' ? reportOther.trim() : '',
+        createdAt: serverTimestamp(),
+        status: 'pending',
+      })
+      setReportSuccess(true)
+      setShowReportDialog(false)
+      setReportReason('')
+      setReportOther('')
+      setTimeout(() => setReportSuccess(false), 3000)
+    } catch (_) {}
+  }
 
   const handleDeleteChat = async () => {
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
@@ -233,6 +305,7 @@ const handleReport = async () => {
   }
 
   const getFriendBtn = () => {
+    if (friendStatus === null) return null
     if (friendStatus === 'accepted') return (
       <button className="friend-btn friends" disabled>✅ Friends</button>
     )
@@ -260,7 +333,6 @@ const handleReport = async () => {
   return (
     <div className={`chat-window ${className || ''}`}>
       <div className="chat-header">
-        {/* Clickable header area */}
         <div className="chat-header-left" onClick={() => setShowProfile(true)}>
           <div className="user-avatar-wrap">
             <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(selectedUser.displayUsername)}, #302b63)` }}>
@@ -284,19 +356,11 @@ const handleReport = async () => {
                   📌 {pinnedChats?.includes(selectedUser.uid) ? 'Unpin Chat' : 'Pin Chat'}
                 </button>
                 {friendStatus === 'accepted' && (
-                  <button onClick={() => { handleUnfriend(); setShowMenu(false) }}>
-                    💔 Unfriend
-                  </button>
+                  <button onClick={() => { handleUnfriend(); setShowMenu(false) }}>💔 Unfriend</button>
                 )}
-                <button onClick={() => { setShowDeleteConfirm(true); setShowMenu(false) }}>
-                  🗑️ Delete Chat
-                </button>
-<button onClick={() => { setShowReportDialog(true); setShowMenu(false) }}>
-  🚩 Report
-</button>
-<button className="danger-menu-item" onClick={() => { setShowBlockConfirm(true); setShowMenu(false) }}>
-  🚫 Block
-</button>
+                <button onClick={() => { setShowDeleteConfirm(true); setShowMenu(false) }}>🗑️ Delete Chat</button>
+                <button onClick={() => { setShowReportDialog(true); setShowMenu(false) }}>🚩 Report</button>
+                <button className="danger-menu-item" onClick={() => { setShowBlockConfirm(true); setShowMenu(false) }}>🚫 Block</button>
               </div>
             )}
           </div>
@@ -304,7 +368,16 @@ const handleReport = async () => {
         </div>
       </div>
 
-      <div className="messages-container">
+      <div
+        className="messages-container"
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+      >
+        {loadingMore && (
+          <div className="load-more-indicator">
+            <div className="typing-indicator"><span></span><span></span><span></span></div>
+          </div>
+        )}
         {messages.map((message) => (
           <Message key={message.id} message={message} currentUser={currentUser} />
         ))}
@@ -336,18 +409,13 @@ const handleReport = async () => {
           value={input}
           onChange={handleTyping}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              sendMessage()
-              setShowEmojiPicker(false)
-            }
+            if (e.key === 'Enter') { sendMessage(); setShowEmojiPicker(false) }
           }}
         />
         <button className="send-btn" onClick={() => { sendMessage(); setShowEmojiPicker(false) }}>➤</button>
       </div>
 
-      {reportSuccess && (
-        <div className="report-toast">🚩 User reported successfully!</div>
-      )}
+      {reportSuccess && <div className="report-toast">🚩 User reported successfully!</div>}
 
       {showDeleteConfirm && (
         <div className="confirm-overlay">
@@ -363,74 +431,66 @@ const handleReport = async () => {
       )}
 
       {showBlockConfirm && (
-  <div className="confirm-overlay">
-    <div className="confirm-box">
-      <h3>🚫 Block User</h3>
-      <p>This will hide your chat with <strong>{selectedUser.displayUsername}</strong>. You can retrieve it by unblocking them in Settings.</p>
-      <div className="confirm-actions">
-        <button className="confirm-cancel" onClick={() => setShowBlockConfirm(false)}>Cancel</button>
-        <button className="confirm-delete" onClick={() => { onBlockUser(selectedUser.uid); setShowBlockConfirm(false) }}>Block</button>
-      </div>
-    </div>
-  </div>
-)}
-
-{showReportDialog && (
-  <div className="confirm-overlay">
-    <div className="confirm-box report-box">
-      <h3>🚩 Report User</h3>
-      <p>Why are you reporting <strong>{selectedUser.displayUsername}</strong>?</p>
-      <div className="report-reasons">
-        {['Harassment or bullying', 'Inappropriate content', 'Spam', 'Fake account', 'Underage user', 'Other'].map((reason) => (
-          <button
-            key={reason}
-            className={`reason-btn ${reportReason === reason ? 'selected' : ''}`}
-            onClick={() => setReportReason(reason)}
-          >
-            {reason}
-          </button>
-        ))}
-      </div>
-      {reportReason === 'Other' && (
-        <input
-          className="report-other-input"
-          type="text"
-          placeholder="Please describe the issue..."
-          value={reportOther}
-          maxLength={200}
-          onChange={(e) => setReportOther(e.target.value)}
-        />
+        <div className="confirm-overlay">
+          <div className="confirm-box">
+            <h3>🚫 Block User</h3>
+            <p>This will hide your chat with <strong>{selectedUser.displayUsername}</strong>. You can retrieve it by unblocking them in Settings.</p>
+            <div className="confirm-actions">
+              <button className="confirm-cancel" onClick={() => setShowBlockConfirm(false)}>Cancel</button>
+              <button className="confirm-delete" onClick={() => { onBlockUser(selectedUser.uid); setShowBlockConfirm(false) }}>Block</button>
+            </div>
+          </div>
+        </div>
       )}
-      <div className="confirm-actions">
-        <button className="confirm-cancel" onClick={() => { setShowReportDialog(false); setReportReason(''); setReportOther('') }}>Cancel</button>
-        <button className="confirm-delete" onClick={handleReport} disabled={!reportReason || (reportReason === 'Other' && !reportOther.trim())}>Submit</button>
-      </div>
-    </div>
-  </div>
-)}
 
-      {/* User Profile Popup */}
+      {showReportDialog && (
+        <div className="confirm-overlay">
+          <div className="confirm-box report-box">
+            <h3>🚩 Report User</h3>
+            <p>Why are you reporting <strong>{selectedUser.displayUsername}</strong>?</p>
+            <div className="report-reasons">
+              {['Harassment or bullying', 'Inappropriate content', 'Spam', 'Fake account', 'Underage user', 'Other'].map((reason) => (
+                <button
+                  key={reason}
+                  className={`reason-btn ${reportReason === reason ? 'selected' : ''}`}
+                  onClick={() => setReportReason(reason)}
+                >
+                  {reason}
+                </button>
+              ))}
+            </div>
+            {reportReason === 'Other' && (
+              <input
+                className="report-other-input"
+                type="text"
+                placeholder="Please describe the issue..."
+                value={reportOther}
+                maxLength={200}
+                onChange={(e) => setReportOther(e.target.value)}
+              />
+            )}
+            <div className="confirm-actions">
+              <button className="confirm-cancel" onClick={() => { setShowReportDialog(false); setReportReason(''); setReportOther('') }}>Cancel</button>
+              <button className="confirm-delete" onClick={handleReport} disabled={!reportReason || (reportReason === 'Other' && !reportOther.trim())}>Submit</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showProfile && (
         <div className="profile-popup-overlay" onClick={() => setShowProfile(false)}>
           <div className="profile-popup" onClick={(e) => e.stopPropagation()}>
             <button className="profile-popup-close" onClick={() => setShowProfile(false)}>✕</button>
-
             <div className="profile-popup-avatar" style={{ background: `linear-gradient(135deg, ${getColor(selectedUser.displayUsername)}, #302b63)` }}>
               {getAvatar(selectedUser.displayUsername)}
             </div>
-
             <h3 className="profile-popup-name">{selectedUser.displayUsername}</h3>
             <p className="profile-popup-appid">{selectedUser.appId}</p>
-
-            {selectedUser.bio && (
-              <p className="profile-popup-bio">"{selectedUser.bio}"</p>
-            )}
-
+            {selectedUser.bio && <p className="profile-popup-bio">"{selectedUser.bio}"</p>}
             <div className="profile-popup-meta">
               {selectedUser.country && <span>📍 {selectedUser.country}</span>}
               {selectedUser.age && <span>🎂 {selectedUser.age} years old</span>}
             </div>
-
             {sharedInterests.length > 0 && (
               <div className="profile-popup-section">
                 <p className="profile-popup-label">Shared Interests</p>
@@ -439,7 +499,6 @@ const handleReport = async () => {
                 </div>
               </div>
             )}
-
             {sharedLanguages.length > 0 && (
               <div className="profile-popup-section">
                 <p className="profile-popup-label">Shared Languages</p>
@@ -448,7 +507,6 @@ const handleReport = async () => {
                 </div>
               </div>
             )}
-
             <div className="profile-popup-status">
               <span className={`status-dot ${selectedUser.online ? 'online' : 'offline'}`} />
               {selectedUser.online ? 'Online' : 'Offline'}

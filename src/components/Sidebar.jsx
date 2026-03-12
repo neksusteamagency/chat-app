@@ -1,7 +1,7 @@
 import { db } from '../firebase'
 import { useState, useEffect } from 'react'
 import { doc, setDoc, collection, query, where, getDocs, onSnapshot, updateDoc, deleteDoc } from 'firebase/firestore'
-
+import { useNavigate } from 'react-router-dom'
 function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unreadCounts, lastMessages, onDiscoverOpen, className, pinnedChats, onPinChat }) {
   const [search, setSearch] = useState('')
   const [searchResult, setSearchResult] = useState(null)
@@ -12,7 +12,7 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
   const [activeTab, setActiveTab] = useState('friends')
   const [messageRequests, setMessageRequests] = useState([])
   const [acceptedChats, setAcceptedChats] = useState([])
-
+  const navigate = useNavigate()
   const getAvatar = (name) => name?.charAt(0).toUpperCase()
   const colors = ['#7c6aff', '#ff6b9d', '#4ecdc4', '#ffa726', '#66bb6a', '#ef5350']
   const getColor = (name) => colors[name?.charCodeAt(0) % colors.length]
@@ -166,7 +166,7 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
       </div>
 
       {/* Profile */}
-      <div className="sidebar-profile" onClick={() => window.location.href = '/profile'}>
+        <div className="sidebar-profile" onClick={() => navigate('/profile')}>
         <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(userData?.displayUsername)}, #302b63)` }}>
           {getAvatar(userData?.displayUsername)}
         </div>
