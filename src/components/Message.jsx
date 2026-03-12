@@ -5,10 +5,12 @@ import { useState } from 'react'
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
 
 function Message({ message, currentUser }) {
-  const isSent = message.senderId === currentUser.uid
+  const isSent = currentUser?.uid ? message.senderId === currentUser.uid : false
   const [showReactions, setShowReactions] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState(message.text)
+
+  if (!currentUser?.uid) return null
 
   const formatTime = (timestamp) => {
     if (!timestamp) return ''
@@ -43,7 +45,6 @@ function Message({ message, currentUser }) {
     const reactions = message.reactions || {}
     return Object.entries(reactions).filter(([_, users]) => users.length > 0)
   }
-
   // Deleted message
   if (message.deleted) {
     return (
