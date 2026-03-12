@@ -1,8 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { auth, db } from './firebase'
+import { auth, db , requestNotificationPermission} from './firebase'
 import { onAuthStateChanged, reload } from 'firebase/auth'
-import { doc, getDoc } from 'firebase/firestore'
+import { doc, getDoc, setDoc } from 'firebase/firestore'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import Chat from './pages/Chat'
@@ -47,10 +47,26 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (userData?.background) {
-      document.body.style.background = userData.background
-    }
-  }, [userData])
+  if (user && user.emailVerified && userData) {
+    requestNotificationPermission().then(async (token) => {
+      if (token) {
+        await setDoc(doc(db, 'users', user.uid), { fcmToken: token }, { merge: true })
+      }
+    })
+  }
+}, [user, userData])
+
+useEffect(() => {
+  const theme = userData?.theme || 'deep-space'
+  document.body.setAttribute('data-theme', theme)
+
+  const backgrounds = {
+    'deep-space': 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
+    'midnight': 'linear-gradient(135deg, #000000, #0a0a0a, #1a1a2e)',
+    'light': '#f0f2f8'
+  }
+  document.body.style.background = backgrounds[theme] || backgrounds['deep-space']
+}, [userData])
 
   if (showSplash) return <SplashScreen />
   if (loading) return <div className="loading">Loading...</div>

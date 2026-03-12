@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { auth, db } from '../firebase'
-import { collection, onSnapshot, doc, query, where, orderBy, setDoc, getDocs } from 'firebase/firestore'
+import { collection, onSnapshot, doc, query, where, orderBy, setDoc, getDocs, deleteDoc } from 'firebase/firestore'
 import Sidebar from '../components/Sidebar'
 import ChatWindow from '../components/ChatWindow'
 import '../styles/chat.css'
@@ -14,6 +14,7 @@ function Chat({ userData }) {
   const [showDiscover, setShowDiscover] = useState(false)
   const [pinnedChats, setPinnedChats] = useState([])
   const [blockedUsers, setBlockedUsers] = useState([])
+  const [blockedByUsers, setBlockedByUsers] = useState([])
   const currentUser = auth.currentUser
 
   // Load users
@@ -49,7 +50,7 @@ function Chat({ userData }) {
     return () => unsub()
   }, [])
 
-  // Load blocked users
+  // Load users I blocked
   useEffect(() => {
     const q = query(collection(db, 'blocks'), where('blockerId', '==', currentUser.uid))
     const unsub = onSnapshot(q, (snap) => {
@@ -57,6 +58,23 @@ function Chat({ userData }) {
     })
     return () => unsub()
   }, [])
+
+  // Load users who blocked me
+  useEffect(() => {
+    const q = query(collection(db, 'blocks'), where('blockedId', '==', currentUser.uid))
+    const unsub = onSnapshot(q, (snap) => {
+      setBlockedByUsers(snap.docs.map((d) => d.data().blockerId))
+    })
+    return () => unsub()
+  }, [])
+
+  // Auto-close chat if block happens
+  useEffect(() => {
+    if (!selectedUser) return
+    if (blockedUsers.includes(selectedUser.uid) || blockedByUsers.includes(selectedUser.uid)) {
+      setSelectedUser(null)
+    }
+  }, [blockedUsers, blockedByUsers, selectedUser])
 
   // Unread counts
   useEffect(() => {
@@ -108,21 +126,21 @@ function Chat({ userData }) {
     await setDoc(doc(db, 'users', currentUser.uid), { pinnedChats: newPinned }, { merge: true })
   }
 
-  const handleBlockUser = async (uid) => {
-    await setDoc(doc(db, 'blocks', `${currentUser.uid}_${uid}`), {
-      blockerId: currentUser.uid,
-      blockedId: uid,
-      createdAt: new Date(),
-    })
-    setSelectedUser(null)
-  }
+const handleBlockUser = async (uid) => {
+  await setDoc(doc(db, 'blocks', `${currentUser.uid}_${uid}`), {
+    blockerId: currentUser.uid,
+    blockedId: uid,
+    createdAt: new Date(),
+  })
+  setSelectedUser(null)
+}
 
   return (
     <div className="chat-container">
       <Sidebar
         currentUser={currentUser}
         userData={userData}
-        users={users.filter((u) => !blockedUsers.includes(u.uid))}
+        users={users.filter((u) => !blockedUsers.includes(u.uid) && !blockedByUsers.includes(u.uid))}
         selectedUser={selectedUser}
         onSelectUser={setSelectedUser}
         unreadCounts={unreadCounts}
@@ -132,15 +150,16 @@ function Chat({ userData }) {
         pinnedChats={pinnedChats}
         onPinChat={handlePinChat}
       />
-<ChatWindow
-  currentUser={currentUser}
-  selectedUser={selectedUser}
-  onClose={() => setSelectedUser(null)}
-  className={selectedUser ? 'visible' : ''}
-  onBlockUser={handleBlockUser}
-  pinnedChats={pinnedChats}
-  onPinChat={handlePinChat}
-/>
+      <ChatWindow
+        currentUser={currentUser}
+        userData={userData}
+        selectedUser={selectedUser}
+        onClose={() => setSelectedUser(null)}
+        className={selectedUser ? 'visible' : ''}
+        onBlockUser={handleBlockUser}
+        pinnedChats={pinnedChats}
+        onPinChat={handlePinChat}
+      />
       {showDiscover && (
         <Discover
           currentUser={currentUser}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { db } from '../firebase'
+import { db, messaging, onMessage } from '../firebase'
 import {
   collection, addDoc, query, orderBy,
   onSnapshot, serverTimestamp, where,
@@ -8,8 +8,8 @@ import {
 import Message from './Message'
 import EmojiPicker from 'emoji-picker-react'
 
-function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser, pinnedChats, onPinChat }) {
-  const [messages, setMessages] = useState([])
+function ChatWindow({ currentUser, userData, selectedUser, onClose, className, onBlockUser, pinnedChats, onPinChat }) {
+    const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -19,13 +19,23 @@ function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser
   const [deletedAt, setDeletedAt] = useState(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [reportSuccess, setReportSuccess] = useState(false)
+  const [showProfile, setShowProfile] = useState(false)
   const bottomRef = useRef(null)
   const typingTimeout = useRef(null)
+  const [showBlockConfirm, setShowBlockConfirm] = useState(false)
 
   const getAvatar = (name) => name?.charAt(0).toUpperCase()
   const colors = ['#7c6aff', '#ff6b9d', '#4ecdc4', '#ffa726', '#66bb6a', '#ef5350']
   const getColor = (name) => colors[name?.charCodeAt(0) % colors.length]
 
+  // Shared interests & languages
+  const sharedInterests = (currentUser?.interests || []).filter(i => selectedUser?.interests?.includes(i))
+  const sharedLanguages = (currentUser?.languages || []).filter(l => selectedUser?.languages?.includes(l))
+
+
+  const [showReportDialog, setShowReportDialog] = useState(false)
+const [reportReason, setReportReason] = useState('')
+const [reportOther, setReportOther] = useState('')
   // Check friend status
   useEffect(() => {
     if (!selectedUser) return
@@ -44,6 +54,19 @@ function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser
     }
     checkFriendStatus()
   }, [selectedUser])
+
+  useEffect(() => {
+  const unsubscribe = onMessage(messaging, (payload) => {
+    const { title, body } = payload.notification
+    if (Notification.permission === 'granted') {
+      new Notification(title, {
+        body,
+        icon: '/pwa-192x192.png',
+      })
+    }
+  })
+  return () => unsubscribe()
+}, [])
 
   // Load deletedAt timestamp for this chat
   useEffect(() => {
@@ -114,21 +137,33 @@ function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser
     }, 1500)
   }
 
-  const sendMessage = async () => {
-    if (input.trim() === '') return
-    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
-    await addDoc(collection(db, 'messages'), {
-      chatId,
-      text: input,
-      senderId: currentUser.uid,
-      receiverId: selectedUser.uid,
-      createdAt: serverTimestamp(),
-      read: false
-    })
-    setInput('')
-    const typingRef = doc(db, 'typing', `${currentUser.uid}_${selectedUser.uid}`)
-    setDoc(typingRef, { typing: false })
-  }
+const sendMessage = async () => {
+  if (input.trim() === '') return
+  const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+  await addDoc(collection(db, 'messages'), {
+    chatId,
+    text: input,
+    senderId: currentUser.uid,
+    receiverId: selectedUser.uid,
+    createdAt: serverTimestamp(),
+    read: false
+  })
+
+  // Save notification for receiver
+  await addDoc(collection(db, 'notifications'), {
+    type: 'new_message',
+    fromUid: currentUser.uid,
+    fromUsername: userData?.displayUsername || '',
+    toUid: selectedUser.uid,
+    message: input.length > 50 ? input.substring(0, 50) + '...' : input,
+    read: false,
+    createdAt: serverTimestamp(),
+  })
+
+  setInput('')
+  const typingRef = doc(db, 'typing', `${currentUser.uid}_${selectedUser.uid}`)
+  setDoc(typingRef, { typing: false })
+}
 
   const handleAddFriend = async () => {
     setFriendLoading(true)
@@ -162,17 +197,26 @@ function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser
     } catch (_) {}
   }
 
-  const handleReport = async () => {
-    try {
-      await addDoc(collection(db, 'reports'), {
-        reporterId: currentUser.uid,
-        reportedId: selectedUser.uid,
-        createdAt: serverTimestamp(),
-      })
-      setReportSuccess(true)
-      setTimeout(() => setReportSuccess(false), 3000)
-    } catch (_) {}
-  }
+const handleReport = async () => {
+  if (!reportReason) return
+  try {
+    await addDoc(collection(db, 'reports'), {
+      reporterId: currentUser.uid,
+      reporterUsername: currentUser.displayName || '',
+      reportedId: selectedUser.uid,
+      reportedUsername: selectedUser.displayUsername,
+      reason: reportReason,
+      details: reportReason === 'Other' ? reportOther.trim() : '',
+      createdAt: serverTimestamp(),
+      status: 'pending',
+    })
+    setReportSuccess(true)
+    setShowReportDialog(false)
+    setReportReason('')
+    setReportOther('')
+    setTimeout(() => setReportSuccess(false), 3000)
+  } catch (_) {}
+}
 
   const handleDeleteChat = async () => {
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
@@ -216,16 +260,20 @@ function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser
   return (
     <div className={`chat-window ${className || ''}`}>
       <div className="chat-header">
-        <div className="user-avatar-wrap">
-          <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(selectedUser.displayUsername)}, #302b63)` }}>
-            {getAvatar(selectedUser.displayUsername)}
+        {/* Clickable header area */}
+        <div className="chat-header-left" onClick={() => setShowProfile(true)}>
+          <div className="user-avatar-wrap">
+            <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(selectedUser.displayUsername)}, #302b63)` }}>
+              {getAvatar(selectedUser.displayUsername)}
+            </div>
+            {selectedUser.online && <div className="online-dot" />}
           </div>
-          {selectedUser.online && <div className="online-dot" />}
+          <div className="chat-header-info">
+            <h3>{selectedUser.displayUsername}</h3>
+            <p>{selectedUser.online ? 'Online' : 'Offline'}</p>
+          </div>
         </div>
-        <div className="chat-header-info">
-          <h3>{selectedUser.displayUsername}</h3>
-          <p>{selectedUser.online ? 'Online' : 'Offline'}</p>
-        </div>
+
         <div className="chat-header-actions">
           {getFriendBtn()}
           <div className="chat-menu-wrap">
@@ -235,18 +283,20 @@ function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser
                 <button onClick={() => { onPinChat && onPinChat(selectedUser.uid); setShowMenu(false) }}>
                   📌 {pinnedChats?.includes(selectedUser.uid) ? 'Unpin Chat' : 'Pin Chat'}
                 </button>
-                <button onClick={() => { handleUnfriend(); setShowMenu(false) }}>
-                  💔 Unfriend
-                </button>
+                {friendStatus === 'accepted' && (
+                  <button onClick={() => { handleUnfriend(); setShowMenu(false) }}>
+                    💔 Unfriend
+                  </button>
+                )}
                 <button onClick={() => { setShowDeleteConfirm(true); setShowMenu(false) }}>
                   🗑️ Delete Chat
                 </button>
-                <button onClick={() => { handleReport(); setShowMenu(false) }}>
-                  🚩 Report
-                </button>
-                <button className="danger-menu-item" onClick={() => { onBlockUser(selectedUser.uid); setShowMenu(false) }}>
-                  🚫 Block
-                </button>
+<button onClick={() => { setShowReportDialog(true); setShowMenu(false) }}>
+  🚩 Report
+</button>
+<button className="danger-menu-item" onClick={() => { setShowBlockConfirm(true); setShowMenu(false) }}>
+  🚫 Block
+</button>
               </div>
             )}
           </div>
@@ -307,6 +357,101 @@ function ChatWindow({ currentUser, selectedUser, onClose, className, onBlockUser
             <div className="confirm-actions">
               <button className="confirm-cancel" onClick={() => setShowDeleteConfirm(false)}>Cancel</button>
               <button className="confirm-delete" onClick={handleDeleteChat}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBlockConfirm && (
+  <div className="confirm-overlay">
+    <div className="confirm-box">
+      <h3>🚫 Block User</h3>
+      <p>This will hide your chat with <strong>{selectedUser.displayUsername}</strong>. You can retrieve it by unblocking them in Settings.</p>
+      <div className="confirm-actions">
+        <button className="confirm-cancel" onClick={() => setShowBlockConfirm(false)}>Cancel</button>
+        <button className="confirm-delete" onClick={() => { onBlockUser(selectedUser.uid); setShowBlockConfirm(false) }}>Block</button>
+      </div>
+    </div>
+  </div>
+)}
+
+{showReportDialog && (
+  <div className="confirm-overlay">
+    <div className="confirm-box report-box">
+      <h3>🚩 Report User</h3>
+      <p>Why are you reporting <strong>{selectedUser.displayUsername}</strong>?</p>
+      <div className="report-reasons">
+        {['Harassment or bullying', 'Inappropriate content', 'Spam', 'Fake account', 'Underage user', 'Other'].map((reason) => (
+          <button
+            key={reason}
+            className={`reason-btn ${reportReason === reason ? 'selected' : ''}`}
+            onClick={() => setReportReason(reason)}
+          >
+            {reason}
+          </button>
+        ))}
+      </div>
+      {reportReason === 'Other' && (
+        <input
+          className="report-other-input"
+          type="text"
+          placeholder="Please describe the issue..."
+          value={reportOther}
+          maxLength={200}
+          onChange={(e) => setReportOther(e.target.value)}
+        />
+      )}
+      <div className="confirm-actions">
+        <button className="confirm-cancel" onClick={() => { setShowReportDialog(false); setReportReason(''); setReportOther('') }}>Cancel</button>
+        <button className="confirm-delete" onClick={handleReport} disabled={!reportReason || (reportReason === 'Other' && !reportOther.trim())}>Submit</button>
+      </div>
+    </div>
+  </div>
+)}
+
+      {/* User Profile Popup */}
+      {showProfile && (
+        <div className="profile-popup-overlay" onClick={() => setShowProfile(false)}>
+          <div className="profile-popup" onClick={(e) => e.stopPropagation()}>
+            <button className="profile-popup-close" onClick={() => setShowProfile(false)}>✕</button>
+
+            <div className="profile-popup-avatar" style={{ background: `linear-gradient(135deg, ${getColor(selectedUser.displayUsername)}, #302b63)` }}>
+              {getAvatar(selectedUser.displayUsername)}
+            </div>
+
+            <h3 className="profile-popup-name">{selectedUser.displayUsername}</h3>
+            <p className="profile-popup-appid">{selectedUser.appId}</p>
+
+            {selectedUser.bio && (
+              <p className="profile-popup-bio">"{selectedUser.bio}"</p>
+            )}
+
+            <div className="profile-popup-meta">
+              {selectedUser.country && <span>📍 {selectedUser.country}</span>}
+              {selectedUser.age && <span>🎂 {selectedUser.age} years old</span>}
+            </div>
+
+            {sharedInterests.length > 0 && (
+              <div className="profile-popup-section">
+                <p className="profile-popup-label">Shared Interests</p>
+                <div className="profile-popup-tags">
+                  {sharedInterests.map(i => <span key={i} className="interest-tag">{i}</span>)}
+                </div>
+              </div>
+            )}
+
+            {sharedLanguages.length > 0 && (
+              <div className="profile-popup-section">
+                <p className="profile-popup-label">Shared Languages</p>
+                <div className="profile-popup-tags">
+                  {sharedLanguages.map(l => <span key={l} className="interest-tag">{l}</span>)}
+                </div>
+              </div>
+            )}
+
+            <div className="profile-popup-status">
+              <span className={`status-dot ${selectedUser.online ? 'online' : 'offline'}`} />
+              {selectedUser.online ? 'Online' : 'Offline'}
             </div>
           </div>
         </div>

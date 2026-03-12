@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { auth, db } from '../firebase'
-import { doc, setDoc, collection, query, where, getDocs, deleteDoc  } from 'firebase/firestore'
+import { doc, setDoc, collection, query, where, getDocs, deleteDoc, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore'
 import { updatePassword, deleteUser, reauthenticateWithCredential, EmailAuthProvider, signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 import '../styles/profile.css'
@@ -77,30 +77,6 @@ const COUNTRIES = [
   '🇵🇰 Pakistan', '🇧🇩 Bangladesh', '🇵🇭 Philippines', '🇹🇭 Thailand',
 ]
 
-const ACCENT_COLORS = [
-  { label: 'Purple', value: '#7c6aff' },
-  { label: 'Pink', value: '#ff6b9d' },
-  { label: 'Teal', value: '#4ecdc4' },
-  { label: 'Orange', value: '#ffa726' },
-  { label: 'Green', value: '#66bb6a' },
-  { label: 'Red', value: '#ef5350' },
-]
-
-const BACKGROUNDS = [
-  { label: 'Deep Space', value: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)' },
-  { label: 'Ocean', value: 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)' },
-  { label: 'Forest', value: 'linear-gradient(135deg, #0a3d0a, #1a5c1a, #0d3b0d)' },
-  { label: 'Sunset', value: 'linear-gradient(135deg, #2d1b69, #11998e, #38ef7d)' },
-  { label: 'Midnight', value: 'linear-gradient(135deg, #000000, #0a0a0a, #1a1a2e)' },
-  { label: 'Galaxy', value: 'linear-gradient(135deg, #1a0533, #2d1b69, #11998e)' },
-]
-
-const handleLogout = async () => {
-  await setDoc(doc(db, 'users', currentUser.uid), { online: false }, { merge: true })
-  await signOut(auth)
-  window.location.href = '/login'
-}
-
 function Section({ title, children }) {
   return (
     <div className="settings-section">
@@ -130,8 +106,14 @@ function Profile({ userData, onUpdateUserData }) {
   const [lastSeen, setLastSeen] = useState(userData?.showLastSeen ?? true)
   const [findByAppId, setFindByAppId] = useState(userData?.findByAppId ?? true)
 
-  const [accentColor, setAccentColor] = useState(userData?.accentColor || '#7c6aff')
-  const [background, setBackground] = useState(userData?.background || BACKGROUNDS[0].value)
+  const [theme, setTheme] = useState(userData?.theme || 'deep-space')
+
+  const [blockedUsers, setBlockedUsers] = useState([])
+  const [blockedUserData, setBlockedUserData] = useState([])
+
+  const [bugCategory, setBugCategory] = useState('')
+  const [bugDescription, setBugDescription] = useState('')
+  const [bugLoading, setBugLoading] = useState(false)
 
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -146,6 +128,22 @@ function Profile({ userData, onUpdateUserData }) {
 
   const showSuccess = (msg) => { setSuccess(msg); setError(''); setTimeout(() => setSuccess(''), 3000) }
   const showError = (msg) => { setError(msg); setSuccess('') }
+
+  useEffect(() => {
+    if (!currentUser) return
+    const q = query(collection(db, 'blocks'), where('blockerId', '==', currentUser.uid))
+    const unsub = onSnapshot(q, async (snap) => {
+      const blocked = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      setBlockedUsers(blocked)
+      const data = []
+      for (const b of blocked) {
+        const userSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', b.blockedId)))
+        if (!userSnap.empty) data.push({ ...userSnap.docs[0].data(), blockDocId: b.id })
+      }
+      setBlockedUserData(data)
+    })
+    return () => unsub()
+  }, [currentUser])
 
   const toggleInterest = (label) => {
     if (selectedInterests.includes(label)) {
@@ -165,6 +163,12 @@ function Profile({ userData, onUpdateUserData }) {
       setSelectedLanguages([...selectedLanguages, label])
     }
     setError('')
+  }
+
+  const handleLogout = async () => {
+    await setDoc(doc(db, 'users', currentUser.uid), { online: false }, { merge: true })
+    await signOut(auth)
+    window.location.href = '/login'
   }
 
   const handleSaveProfile = async () => {
@@ -265,14 +269,46 @@ function Profile({ userData, onUpdateUserData }) {
   const handleSaveAppearance = async () => {
     setLoading(true)
     try {
-      await setDoc(doc(db, 'users', currentUser.uid), { accentColor, background }, { merge: true })
-      onUpdateUserData({ ...userData, accentColor, background })
-      document.body.style.background = background
-      showSuccess('Appearance saved!')
+      await setDoc(doc(db, 'users', currentUser.uid), { theme }, { merge: true })
+      onUpdateUserData({ ...userData, theme })
+      const backgrounds = {
+        'deep-space': 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
+        'midnight': 'linear-gradient(135deg, #000000, #0a0a0a, #1a1a2e)',
+        'light': '#f0f2f8'
+      }
+      document.body.style.background = backgrounds[theme]
+      document.body.setAttribute('data-theme', theme)
+      showSuccess('Theme saved!')
     } catch (_) {
       showError('Something went wrong!')
     }
     setLoading(false)
+  }
+
+  const handleUnblock = async (blockDocId) => {
+    await deleteDoc(doc(db, 'blocks', blockDocId))
+    showSuccess('User unblocked!')
+  }
+
+  const handleReportBug = async () => {
+    if (!bugCategory || !bugDescription.trim()) return showError('Please select a category and describe the bug!')
+    setBugLoading(true)
+    try {
+      await addDoc(collection(db, 'bugReports'), {
+        userId: currentUser.uid,
+        username: userData?.displayUsername,
+        category: bugCategory,
+        description: bugDescription.trim(),
+        createdAt: serverTimestamp(),
+        status: 'pending',
+      })
+      setBugCategory('')
+      setBugDescription('')
+      showSuccess('Bug reported! Thank you 🙏')
+    } catch (_) {
+      showError('Something went wrong!')
+    }
+    setBugLoading(false)
   }
 
   const formatDate = (date) => {
@@ -282,7 +318,7 @@ function Profile({ userData, onUpdateUserData }) {
   }
 
   return (
-    <div className="profile-page" style={{ background: userData?.background || BACKGROUNDS[0].value }}>
+    <div className="profile-page">
       <div className="profile-wrapper">
 
         <div className="profile-topbar">
@@ -313,22 +349,10 @@ function Profile({ userData, onUpdateUserData }) {
         <Section title="👤 Edit Profile">
           {!editingProfile ? (
             <>
-              <div className="info-row">
-                <span>Username</span>
-                <span>{userData?.displayUsername}</span>
-              </div>
-              <div className="info-row">
-                <span>Bio</span>
-                <span>{userData?.bio || '—'}</span>
-              </div>
-              <div className="info-row">
-                <span>Age</span>
-                <span>{userData?.age || '—'}</span>
-              </div>
-              <div className="info-row">
-                <span>Country</span>
-                <span>{userData?.countryFull || userData?.country || '—'}</span>
-              </div>
+              <div className="info-row"><span>Username</span><span>{userData?.displayUsername}</span></div>
+              <div className="info-row"><span>Bio</span><span>{userData?.bio || '—'}</span></div>
+              <div className="info-row"><span>Age</span><span>{userData?.age || '—'}</span></div>
+              <div className="info-row"><span>Country</span><span>{userData?.countryFull || userData?.country || '—'}</span></div>
               <div className="info-row">
                 <span>Languages</span>
                 <div className="mini-interests">
@@ -349,24 +373,15 @@ function Profile({ userData, onUpdateUserData }) {
                 <span>👤</span>
                 <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
               </div>
-
               <div className="input-group">
                 <span>✍️</span>
-                <input
-                  type="text"
-                  placeholder="Short bio (max 150 chars)"
-                  value={bio}
-                  maxLength={150}
-                  onChange={(e) => setBio(e.target.value)}
-                />
+                <input type="text" placeholder="Short bio (max 150 chars)" value={bio} maxLength={150} onChange={(e) => setBio(e.target.value)} />
               </div>
               <p className="bio-counter">{bio.length}/150</p>
-
               <div className="input-group">
                 <span>🎂</span>
-                <input type="number" placeholder="Age" value={age} min="18" max="65" onChange={(e) => setAge(e.target.value)} />
+                <input type="number" placeholder="Age" value={age} min="13" max="100" onChange={(e) => setAge(e.target.value)} />
               </div>
-
               <div className="input-group">
                 <span>🌍</span>
                 <select value={country} onChange={(e) => setCountry(e.target.value)} className="country-select">
@@ -374,35 +389,24 @@ function Profile({ userData, onUpdateUserData }) {
                   {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
-
               <p className="interests-label">Languages <span>(max 5)</span></p>
               <div className="interests-grid">
                 {LANGUAGES.map((lang) => (
-                  <button
-                    key={lang.label}
-                    className={`interest-btn ${selectedLanguages.includes(lang.label) ? 'selected' : ''}`}
-                    onClick={() => toggleLanguage(lang.label)}
-                  >
+                  <button key={lang.label} className={`interest-btn ${selectedLanguages.includes(lang.label) ? 'selected' : ''}`} onClick={() => toggleLanguage(lang.label)}>
                     {lang.emoji} {lang.label}
                   </button>
                 ))}
               </div>
               <div className="step-counter">{selectedLanguages.length}/5 selected</div>
-
               <p className="interests-label">Interests <span>(max 10)</span></p>
               <div className="interests-grid">
                 {INTERESTS.map((interest) => (
-                  <button
-                    key={interest.label}
-                    className={`interest-btn ${selectedInterests.includes(interest.label) ? 'selected' : ''}`}
-                    onClick={() => toggleInterest(interest.label)}
-                  >
+                  <button key={interest.label} className={`interest-btn ${selectedInterests.includes(interest.label) ? 'selected' : ''}`} onClick={() => toggleInterest(interest.label)}>
                     {interest.emoji} {interest.label}
                   </button>
                 ))}
               </div>
               <div className="step-counter">{selectedInterests.length}/10 selected</div>
-
               <div className="btn-row">
                 <button className="cancel-btn" onClick={() => setEditingProfile(false)}>Cancel</button>
                 <button className="save-btn" onClick={handleSaveProfile} disabled={loading}>Save</button>
@@ -427,9 +431,7 @@ function Profile({ userData, onUpdateUserData }) {
             <input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
           </div>
           <button className="settings-btn" onClick={handleChangePassword} disabled={loading}>Update Password</button>
-
           <div className="divider-line" />
-
           <p className="section-label danger">Danger Zone</p>
           {!showDeleteConfirm ? (
             <button className="danger-btn" onClick={() => setShowDeleteConfirm(true)}>🗑️ Delete Account</button>
@@ -446,72 +448,86 @@ function Profile({ userData, onUpdateUserData }) {
               </div>
             </>
           )}
-<button className="logout-btn-settings" onClick={handleLogout}>
-  🚪 Logout
-</button>
+          <div className="divider-line" />
+          <button className="logout-btn-settings" onClick={handleLogout}>🚪 Logout</button>
         </Section>
 
         {/* Privacy */}
         <Section title="🛡️ Privacy">
           <div className="toggle-row">
-            <div>
-              <p>Show online status</p>
-              <span>Let others see when you're online</span>
-            </div>
-            <div className={`toggle ${onlineStatus ? 'on' : ''}`} onClick={() => setOnlineStatus(!onlineStatus)}>
-              <div className="toggle-thumb" />
-            </div>
+            <div><p>Show online status</p><span>Let others see when you're online</span></div>
+            <div className={`toggle ${onlineStatus ? 'on' : ''}`} onClick={() => setOnlineStatus(!onlineStatus)}><div className="toggle-thumb" /></div>
           </div>
           <div className="toggle-row">
-            <div>
-              <p>Show last seen</p>
-              <span>Let others see when you were last active</span>
-            </div>
-            <div className={`toggle ${lastSeen ? 'on' : ''}`} onClick={() => setLastSeen(!lastSeen)}>
-              <div className="toggle-thumb" />
-            </div>
+            <div><p>Show last seen</p><span>Let others see when you were last active</span></div>
+            <div className={`toggle ${lastSeen ? 'on' : ''}`} onClick={() => setLastSeen(!lastSeen)}><div className="toggle-thumb" /></div>
           </div>
           <div className="toggle-row">
-            <div>
-              <p>Find me by App ID</p>
-              <span>Allow others to find you using your App ID</span>
-            </div>
-            <div className={`toggle ${findByAppId ? 'on' : ''}`} onClick={() => setFindByAppId(!findByAppId)}>
-              <div className="toggle-thumb" />
-            </div>
+            <div><p>Find me by App ID</p><span>Allow others to find you using your App ID</span></div>
+            <div className={`toggle ${findByAppId ? 'on' : ''}`} onClick={() => setFindByAppId(!findByAppId)}><div className="toggle-thumb" /></div>
           </div>
           <button className="settings-btn" onClick={handleSavePrivacy} disabled={loading}>Save Privacy Settings</button>
         </Section>
 
+        {/* Blocked Users */}
+        <Section title="🚫 Blocked Users">
+          {blockedUserData.length === 0 ? (
+            <p className="notif-empty">No blocked users</p>
+          ) : (
+            blockedUserData.map((u) => (
+              <div key={u.uid} className="blocked-user-row">
+                <div className="avatar blocked-avatar" style={{ background: `linear-gradient(135deg, ${getColor(u.displayUsername)}, #302b63)` }}>
+                  {getAvatar(u.displayUsername)}
+                </div>
+                <span className="blocked-username">{u.displayUsername}</span>
+                <button className="unblock-btn" onClick={() => handleUnblock(u.blockDocId)}>Unblock</button>
+              </div>
+            ))
+          )}
+        </Section>
+
         {/* Appearance */}
         <Section title="🎨 Appearance">
-          <p className="section-label">Accent Color</p>
-          <div className="color-grid">
-            {ACCENT_COLORS.map((color) => (
-              <div key={color.value} className={`color-dot ${accentColor === color.value ? 'selected' : ''}`} style={{ background: color.value }} onClick={() => setAccentColor(color.value)} />
+          <p className="section-label">Theme</p>
+          <div className="theme-grid">
+            <div className={`theme-card ${theme === 'deep-space' ? 'selected' : ''}`} onClick={() => setTheme('deep-space')} style={{ background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)' }}>
+              <span className="theme-icon">🌌</span>
+              <span className="theme-name">Deep Space</span>
+            </div>
+            <div className={`theme-card ${theme === 'midnight' ? 'selected' : ''}`} onClick={() => setTheme('midnight')} style={{ background: 'linear-gradient(135deg, #000000, #0a0a0a, #1a1a2e)' }}>
+              <span className="theme-icon">🌑</span>
+              <span className="theme-name">Midnight</span>
+            </div>
+            <div className={`theme-card ${theme === 'light' ? 'selected' : ''}`} onClick={() => setTheme('light')} style={{ background: '#f0f2f8', border: '2px solid #e0e0e0' }}>
+              <span className="theme-icon">☀️</span>
+              <span className="theme-name light-label">Light</span>
+            </div>
+          </div>
+          <button className="settings-btn" onClick={handleSaveAppearance} disabled={loading}>Save Theme</button>
+        </Section>
+
+        {/* Report a Bug */}
+        <Section title="🐛 Report a Bug">
+          <p className="section-label">Category</p>
+          <div className="bug-categories">
+            {['UI', 'Crash', 'Performance', 'Other'].map((cat) => (
+              <button key={cat} className={`reason-btn ${bugCategory === cat ? 'selected' : ''}`} onClick={() => setBugCategory(cat)}>
+                {cat === 'UI' ? '🎨' : cat === 'Crash' ? '💥' : cat === 'Performance' ? '⚡' : '🔧'} {cat}
+              </button>
             ))}
           </div>
-          <p className="section-label">Background</p>
-          <div className="bg-grid">
-            {BACKGROUNDS.map((bg) => (
-              <div key={bg.value} className={`bg-option ${background === bg.value ? 'selected' : ''}`} style={{ background: bg.value }} onClick={() => setBackground(bg.value)}>
-                <span>{bg.label}</span>
-              </div>
-            ))}
+          <div className="input-group" style={{ marginTop: '12px' }}>
+            <span>📝</span>
+            <input type="text" placeholder="Describe the bug... (max 300 chars)" value={bugDescription} maxLength={300} onChange={(e) => setBugDescription(e.target.value)} />
           </div>
-          <button className="settings-btn" onClick={handleSaveAppearance} disabled={loading}>Save Appearance</button>
+          <p className="bio-counter">{bugDescription.length}/300</p>
+          <button className="settings-btn" onClick={handleReportBug} disabled={bugLoading}>🐛 Submit Bug Report</button>
         </Section>
 
         {/* About */}
         <Section title="ℹ️ About">
-          <div className="info-row">
-            <span>App Version</span>
-            <span>1.0.0</span>
-          </div>
-          <div className="info-row">
-            <span>Made with</span>
-            <span>love for nasriiiiiii</span>
-          </div>
+          <div className="info-row"><span>App Version</span><span>1.0.0</span></div>
+          <div className="info-row"><span>Made with</span><span>love for nasriiiiiii</span></div>
           <div className="about-links">
             <button className="about-link">Terms of Service</button>
             <button className="about-link">Privacy Policy</button>
