@@ -6,6 +6,7 @@ const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
 
 function Message({ message, currentUser }) {
   const isSent = currentUser?.uid ? message.senderId === currentUser.uid : false
+  const isPending = message.pending === true
   const [showReactions, setShowReactions] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState(message.text)
@@ -52,7 +53,9 @@ function Message({ message, currentUser }) {
         <div className="message-bubble deleted-bubble">
           🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}
         </div>
-        <span className="message-time">{formatTime(message.createdAt)}</span>
+<span className="message-time">
+  {isPending ? '🕐' : formatTime(message.createdAt)}
+</span>
       </div>
     )
   }

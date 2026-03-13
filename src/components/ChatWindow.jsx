@@ -115,7 +115,14 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
           })
         : allMessages
 
-      setMessages(filtered)
+      // Merge with pending messages so they don't disappear while firebase confirms
+      setMessages((prev) => {
+        const pendingMsgs = prev.filter((m) => m.pending)
+        const pendingTexts = pendingMsgs.map((m) => m.text)
+        const confirmedFiltered = filtered.filter((m) => !pendingTexts.includes(m.text))
+        return [...confirmedFiltered, ...pendingMsgs]
+      })
+
       setMessagesReady(true)
 
       if (snapshot.docs.length >= PAGE_SIZE) {
@@ -164,6 +171,7 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     setLoadingMore(false)
   }
 
+  // Scroll handler
   const handleScroll = () => {
     const container = messagesContainerRef.current
     if (!container) return
@@ -183,13 +191,15 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
   }, [selectedUser])
 
   // Scroll to bottom on initial load only
-  useEffect(() => {
-    if (messages.length === 0 || !messagesReady) return
-    if (isInitialLoad.current) {
+useEffect(() => {
+  if (messages.length === 0 || !messagesReady) return
+  if (isInitialLoad.current) {
+    setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'instant' })
       isInitialLoad.current = false
-    }
-  }, [messages, messagesReady])
+    }, 50)
+  }
+}, [messages, messagesReady])
 
   const handleTyping = (e) => {
     setInput(e.target.value)
@@ -206,6 +216,21 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     isSending.current = true
     const textToSend = input.trim()
     setInput('')
+
+    // Optimistic UI — show message instantly
+    const tempId = `temp_${Date.now()}`
+    const tempMessage = {
+      id: tempId,
+      text: textToSend,
+      senderId: currentUser.uid,
+      receiverId: selectedUser.uid,
+      createdAt: { toDate: () => new Date() },
+      read: false,
+      pending: true,
+    }
+setMessages((prev) => [...prev, tempMessage])
+setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
     try {
       await addDoc(collection(db, 'messages'), {
@@ -227,8 +252,9 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
       })
       const typingRef = doc(db, 'typing', `${currentUser.uid}_${selectedUser.uid}`)
       setDoc(typingRef, { typing: false })
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     } catch (_) {
+      // Remove temp message if failed
+      setMessages((prev) => prev.filter((m) => m.id !== tempId))
       setInput(textToSend)
     }
     isSending.current = false
