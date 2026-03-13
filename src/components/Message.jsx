@@ -95,117 +95,122 @@ function Message({ message, currentUser, onReply }) {
     return Object.entries(reactions).filter(([_, users]) => users.length > 0)
   }
 
-  // Time + read receipt footer (shown inside bubble)
-  const renderFooter = () => (
-    <span className="message-footer">
-      {isPending ? '🕐' : formatTime(message.createdAt)}
-      {isSent && !isPending && (
-        <span className={`read-receipt ${message.read ? 'read' : 'sent'}`}>
-          {message.read ? '✓✓' : '✓'}
-        </span>
-      )}
-    </span>
-  )
+  // Improved read receipt rendering
+const renderFooter = () => (
+  <div className="message-footer">
+    {isPending ? '🕐' : formatTime(message.createdAt)}
+    {isSent && !isPending && (
+      <span className={`read-receipt ${message.read ? 'read' : 'sent'}`}>
+        {message.read ? '✓✓' : '✓'}
+      </span>
+    )}
+  </div>
+)
 
-  if (message.deleted) {
-    return (
-      <div className={`message-row ${isSent ? 'sent' : 'received'}`}>
-        <div className="message-bubble deleted-bubble">
-          <span>🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}</span>
+if (message.deleted) {
+  return (
+    <div className={`message-row ${isSent ? 'sent' : 'received'}`}>
+      <div className="message-bubble deleted-bubble">
+        🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}
+        {renderFooter()}
+      </div>
+    </div>
+  )
+}
+
+return (
+  <>
+    <div
+      className={`message-row ${isSent ? 'sent' : 'received'}`}
+      ref={messageRef}
+      onContextMenu={handleContextMenu}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onTouchMove={handleTouchMove}
+    >
+      {message.replyTo && (
+        <div className="reply-preview">
+          <div className="reply-author">{message.replyTo.senderName}</div>
+          <div className="reply-text">{message.replyTo.text}</div>
+        </div>
+      )}
+
+      {isEditing ? (
+        <div className="edit-bubble">
+          <input
+            type="text"
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleEdit()
+              if (e.key === 'Escape') setIsEditing(false)
+            }}
+            autoFocus
+          />
+          <div className="edit-actions">
+            <button className="edit-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
+            <button className="edit-save" onClick={handleEdit}>Save</button>
+          </div>
+        </div>
+      ) : (
+        <div className="message-bubble">
+          <div className="message-text">
+            {message.text}
+            {message.edited && <span className="edited-tag"> (edited)</span>}
+          </div>
           {renderFooter()}
         </div>
-      </div>
-    )
-  }
-
-  return (
-    <>
-      <div
-        ref={messageRef}
-        className={`message-row ${isSent ? 'sent' : 'received'}`}
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        onTouchMove={handleTouchMove}
-        onContextMenu={handleContextMenu}
-      >
-        {message.replyTo && (
-          <div className="reply-preview">
-            <span className="reply-author">{message.replyTo.senderName}</span>
-            <span className="reply-text">{message.replyTo.text}</span>
-          </div>
-        )}
-
-        {isEditing ? (
-          <div className="edit-bubble">
-            <input
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleEdit()
-                if (e.key === 'Escape') setIsEditing(false)
-              }}
-              autoFocus
-            />
-            <div className="edit-actions">
-              <button className="edit-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
-              <button className="edit-save" onClick={handleEdit}>Save</button>
-            </div>
-          </div>
-        ) : (
-          <div className="message-bubble">
-            <span className="message-text">{message.text}</span>
-            {message.edited && <span className="edited-tag"> (edited)</span>}
-            {renderFooter()}
-          </div>
-        )}
-
-        {getReactionSummary().length > 0 && (
-          <div className="reactions-display">
-            {getReactionSummary().map(([emoji, users]) => (
-              <button
-                key={emoji}
-                className={`reaction-badge ${users.includes(currentUser.uid) ? 'reacted' : ''}`}
-                onClick={() => handleReaction(emoji)}
-              >
-                {emoji}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {showMenu && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={menuRef}
-          className="message-context-menu"
-          style={{ top: menuPos.y, left: menuPos.x }}
-        >
-          <div className="context-reactions">
-            {REACTIONS.map((emoji) => (
-              <button key={emoji} onClick={() => handleReaction(emoji)}>
-                {emoji}
-              </button>
-            ))}
-          </div>
-          <div className="context-divider" />
-          <button className="context-action" onClick={() => { onReply && onReply(message); setShowMenu(false) }}>
-            ↩️ Reply
-          </button>
-          {isSent && (
-            <button className="context-action" onClick={() => { setIsEditing(true); setShowMenu(false) }}>
-              ✏️ Edit
-            </button>
-          )}
-          {isSent && (
-            <button className="context-action danger" onClick={deleteMessage}>
-              🗑️ Delete
-            </button>
-          )}
-        </div>,
-        document.body
       )}
-    </>
-  )
+
+      {getReactionSummary().length > 0 && (
+        <div className="reactions-display">
+          {getReactionSummary().map(([emoji, users]) => (
+            <span
+              key={emoji}
+              className={`reaction-badge ${users.includes(currentUser.uid) ? 'reacted' : ''}`}
+              onClick={() => handleReaction(emoji)}
+            >
+              {emoji} {users.length}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+
+    {showMenu && typeof document !== 'undefined' && createPortal(
+      <div
+        className="message-context-menu"
+        ref={menuRef}
+        style={{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }}
+      >
+        <div className="context-reactions">
+          {REACTIONS.map((emoji) => (
+            <button key={emoji} onClick={() => handleReaction(emoji)}>
+              {emoji}
+            </button>
+          ))}
+        </div>
+
+        <div className="context-divider"></div>
+
+        <button className="context-action" onClick={() => { onReply && onReply(message); setShowMenu(false) }}>
+          ↩️ Reply
+        </button>
+        {isSent && (
+          <button className="context-action" onClick={() => { setIsEditing(true); setShowMenu(false) }}>
+            ✏️ Edit
+          </button>
+        )}
+        {isSent && (
+          <button className="context-action danger" onClick={deleteMessage}>
+            🗑️ Delete
+          </button>
+        )}
+      </div>,
+      document.body
+    )}
+  </>
+)
 }
 
 export default Message

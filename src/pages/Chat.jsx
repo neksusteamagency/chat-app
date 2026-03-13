@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { auth, db } from '../firebase'
-import { collection, onSnapshot, doc, query, where, orderBy, setDoc, getDocs, deleteDoc } from 'firebase/firestore'
+import { auth, db, rtdb } from '../firebase'
+import { collection, onSnapshot, doc, query, where, orderBy, setDoc, getDocs, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { ref, onValue, onDisconnect, set } from 'firebase/database'
 import Sidebar from '../components/Sidebar'
 import ChatWindow from '../components/ChatWindow'
 import '../styles/chat.css'
@@ -17,26 +18,45 @@ function Chat({ userData }) {
   const [blockedByUsers, setBlockedByUsers] = useState([])
   const currentUser = auth.currentUser
 
-  // Load users
+  // ✅ PRESENCE: only write current user's status to RTDB
+  useEffect(() => {
+    if (!currentUser) return
+
+    const userStatusRef = ref(rtdb, `status/${currentUser.uid}`)
+    const connectedRef = ref(rtdb, '.info/connected')
+
+    const unsub = onValue(connectedRef, (snap) => {
+      if (!snap.val()) return
+
+      // When user disconnects, Firebase server runs this automatically
+      onDisconnect(userStatusRef).set({
+        online: false,
+        lastSeen: Date.now(),
+      })
+
+      // Mark as online now
+      set(userStatusRef, {
+        online: true,
+        lastSeen: Date.now(),
+      })
+    })
+
+    return () => {
+      unsub()
+      // Mark offline on logout/unmount
+      set(userStatusRef, { online: false, lastSeen: Date.now() })
+    }
+  }, [currentUser?.uid])
+
+  // Load users from Firestore (no status merging here)
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
       const allUsers = snapshot.docs
-        .map((doc) => doc.data())
+        .map((d) => d.data())
         .filter((u) => u.uid !== currentUser.uid)
       setUsers(allUsers)
     })
-
-    setDoc(doc(db, 'users', currentUser.uid), { online: true }, { merge: true })
-
-    const handleOffline = () => {
-      setDoc(doc(db, 'users', currentUser.uid), { online: false }, { merge: true })
-    }
-    window.addEventListener('beforeunload', handleOffline)
-
-    return () => {
-      unsubscribe()
-      window.removeEventListener('beforeunload', handleOffline)
-    }
+    return () => unsubscribe()
   }, [])
 
   // Load pinned chats
@@ -126,14 +146,14 @@ function Chat({ userData }) {
     await setDoc(doc(db, 'users', currentUser.uid), { pinnedChats: newPinned }, { merge: true })
   }
 
-const handleBlockUser = async (uid) => {
-  await setDoc(doc(db, 'blocks', `${currentUser.uid}_${uid}`), {
-    blockerId: currentUser.uid,
-    blockedId: uid,
-    createdAt: new Date(),
-  })
-  setSelectedUser(null)
-}
+  const handleBlockUser = async (uid) => {
+    await setDoc(doc(db, 'blocks', `${currentUser.uid}_${uid}`), {
+      blockerId: currentUser.uid,
+      blockedId: uid,
+      createdAt: new Date(),
+    })
+    setSelectedUser(null)
+  }
 
   return (
     <div className="chat-container">

@@ -1,7 +1,64 @@
-import { db } from '../firebase'
+import { db, rtdb } from '../firebase'
 import { useState, useEffect } from 'react'
 import { doc, setDoc, collection, query, where, getDocs, onSnapshot, updateDoc, deleteDoc } from 'firebase/firestore'
+import { ref, onValue } from 'firebase/database'
 import { useNavigate } from 'react-router-dom'
+
+// ✅ Reads RTDB presence + respects showOnline privacy setting
+function UserItem({ user, selectedUser, onSelectUser, currentUser, lastMessages, unreadCounts }) {
+  const [isOnline, setIsOnline] = useState(false)
+
+  const getAvatar = (name) => name?.charAt(0).toUpperCase()
+  const colors = ['#7c6aff', '#ff6b9d', '#4ecdc4', '#ffa726', '#66bb6a', '#ef5350']
+  const getColor = (name) => colors[name?.charCodeAt(0) % colors.length]
+
+  useEffect(() => {
+    if (!user?.uid) return
+    const statusRef = ref(rtdb, `status/${user.uid}`)
+    const unsub = onValue(statusRef, (snap) => {
+      if (snap.exists()) {
+        setIsOnline(snap.val().online === true)
+      } else {
+        setIsOnline(false)
+      }
+    })
+    return () => unsub()
+  }, [user?.uid])
+
+  // ✅ Respect privacy: only show online dot if user allows it
+  const showOnlineDot = isOnline && (user.showOnline !== false)
+
+  return (
+    <div
+      key={user.uid}
+      className={`user-item ${selectedUser?.uid === user.uid ? 'active' : ''}`}
+      onClick={() => onSelectUser(user)}
+    >
+      <div className="user-avatar-wrap">
+        <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(user.displayUsername)}, #302b63)` }}>
+          {getAvatar(user.displayUsername)}
+        </div>
+        {showOnlineDot && <div className="online-dot" />}
+      </div>
+      <div className="user-info">
+        <h4>{user.displayUsername}</h4>
+        <p className="last-message">
+          {lastMessages[user.uid]
+            ? lastMessages[user.uid].deleted
+              ? '🚫 Message deleted'
+              : lastMessages[user.uid].senderId === currentUser.uid
+                ? `You: ${lastMessages[user.uid].text}`
+                : lastMessages[user.uid].text
+            : showOnlineDot ? 'Online' : 'Offline'}
+        </p>
+      </div>
+      {unreadCounts[user.uid] > 0 && (
+        <div className="badge">{unreadCounts[user.uid]}</div>
+      )}
+    </div>
+  )
+}
+
 function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unreadCounts, lastMessages, onDiscoverOpen, className, pinnedChats, onPinChat }) {
   const [search, setSearch] = useState('')
   const [searchResult, setSearchResult] = useState(null)
@@ -13,30 +70,26 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
   const [messageRequests, setMessageRequests] = useState([])
   const [acceptedChats, setAcceptedChats] = useState([])
   const navigate = useNavigate()
+
   const getAvatar = (name) => name?.charAt(0).toUpperCase()
   const colors = ['#7c6aff', '#ff6b9d', '#4ecdc4', '#ffa726', '#66bb6a', '#ef5350']
   const getColor = (name) => colors[name?.charCodeAt(0) % colors.length]
 
-  // Listen to accepted friends
   useEffect(() => {
     if (!currentUser) return
     const q1 = query(collection(db, 'friends'), where('senderId', '==', currentUser.uid), where('status', '==', 'accepted'))
     const q2 = query(collection(db, 'friends'), where('receiverId', '==', currentUser.uid), where('status', '==', 'accepted'))
-
     const unsub1 = onSnapshot(q1, (snap) => {
       const ids = snap.docs.map((d) => d.data().receiverId)
       setFriends((prev) => [...new Set([...prev.filter((f) => !snap.docs.map(d => d.data().receiverId).includes(f)), ...ids])])
     })
-
     const unsub2 = onSnapshot(q2, (snap) => {
       const ids = snap.docs.map((d) => d.data().senderId)
       setFriends((prev) => [...new Set([...prev, ...ids])])
     })
-
     return () => { unsub1(); unsub2() }
   }, [currentUser])
 
-  // Listen to incoming friend requests
   useEffect(() => {
     if (!currentUser) return
     const q = query(collection(db, 'friends'), where('receiverId', '==', currentUser.uid), where('status', '==', 'pending'))
@@ -53,7 +106,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
     return () => unsub()
   }, [currentUser])
 
-  // Listen to message requests (non-friends who messaged me)
   useEffect(() => {
     if (!currentUser) return
     const q = query(collection(db, 'messageRequests'), where('toUid', '==', currentUser.uid), where('status', '==', 'pending'))
@@ -64,7 +116,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
     return () => unsub()
   }, [currentUser])
 
-  // Listen to accepted message chats (non-friends with accepted requests)
   useEffect(() => {
     if (!currentUser) return
     const q1 = query(collection(db, 'messageRequests'), where('toUid', '==', currentUser.uid), where('status', '==', 'accepted'))
@@ -126,38 +177,19 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
   const totalRequests = friendRequests.length + messageRequests.length
 
   const renderUserItem = (user) => (
-    <div
+    <UserItem
       key={user.uid}
-      className={`user-item ${selectedUser?.uid === user.uid ? 'active' : ''}`}
-      onClick={() => onSelectUser(user)}
-    >
-      <div className="user-avatar-wrap">
-        <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(user.displayUsername)}, #302b63)` }}>
-          {getAvatar(user.displayUsername)}
-        </div>
-        {user.online && <div className="online-dot" />}
-      </div>
-      <div className="user-info">
-        <h4>{user.displayUsername}</h4>
-        <p className="last-message">
-          {lastMessages[user.uid]
-            ? lastMessages[user.uid].deleted ? '🚫 Message deleted'
-            : lastMessages[user.uid].senderId === currentUser.uid
-              ? `You: ${lastMessages[user.uid].text}`
-              : lastMessages[user.uid].text
-            : user.online ? 'Online' : 'Offline'}
-        </p>
-      </div>
-      {unreadCounts[user.uid] > 0 && (
-        <div className="badge">{unreadCounts[user.uid]}</div>
-      )}
-    </div>
+      user={user}
+      selectedUser={selectedUser}
+      onSelectUser={onSelectUser}
+      currentUser={currentUser}
+      lastMessages={lastMessages}
+      unreadCounts={unreadCounts}
+    />
   )
 
   return (
     <div className={`sidebar ${className || ''}`}>
-
-      {/* Header */}
       <div className="sidebar-header">
         <h2>💬 ChatApp</h2>
         <div className="header-btns">
@@ -165,8 +197,7 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
         </div>
       </div>
 
-      {/* Profile */}
-        <div className="sidebar-profile" onClick={() => navigate('/profile')}>
+      <div className="sidebar-profile" onClick={() => navigate('/profile')}>
         <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(userData?.displayUsername)}, #302b63)` }}>
           {getAvatar(userData?.displayUsername)}
         </div>
@@ -177,21 +208,15 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
         <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>→</span>
       </div>
 
-      {/* Tabs */}
       <div className="sidebar-tabs">
-        <button className={`sidebar-tab ${activeTab === 'friends' ? 'active' : ''}`} onClick={() => setActiveTab('friends')}>
-          Friends
-        </button>
-        <button className={`sidebar-tab ${activeTab === 'chats' ? 'active' : ''}`} onClick={() => setActiveTab('chats')}>
-          Chats
-        </button>
+        <button className={`sidebar-tab ${activeTab === 'friends' ? 'active' : ''}`} onClick={() => setActiveTab('friends')}>Friends</button>
+        <button className={`sidebar-tab ${activeTab === 'chats' ? 'active' : ''}`} onClick={() => setActiveTab('chats')}>Chats</button>
         <button className={`sidebar-tab ${activeTab === 'requests' ? 'active' : ''}`} onClick={() => setActiveTab('requests')}>
           Requests
           {totalRequests > 0 && <span className="tab-badge">{totalRequests}</span>}
         </button>
       </div>
 
-      {/* Users list */}
       <div className="users-list">
         <div className="search-box">
           <input
@@ -202,7 +227,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
           />
         </div>
 
-        {/* Search result */}
         {searchResult && (
           <div className="search-result">
             <h3>Search Result</h3>
@@ -211,7 +235,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
                 <div className="avatar" style={{ background: `linear-gradient(135deg, ${getColor(searchResult.displayUsername)}, #302b63)` }}>
                   {getAvatar(searchResult.displayUsername)}
                 </div>
-                {searchResult.online && <div className="online-dot" />}
               </div>
               <div className="user-info">
                 <h4>{searchResult.displayUsername}</h4>
@@ -225,7 +248,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
 
         {!searchResult && !notFound && (
           <>
-            {/* FRIENDS TAB */}
             {activeTab === 'friends' && (
               <>
                 {pinnedChats.length > 0 && (
@@ -247,7 +269,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
               </>
             )}
 
-            {/* CHATS TAB */}
             {activeTab === 'chats' && (
               <>
                 <h3>Chats {chatUsers.length > 0 ? `(${chatUsers.length})` : ''}</h3>
@@ -263,10 +284,8 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
               </>
             )}
 
-            {/* REQUESTS TAB */}
             {activeTab === 'requests' && (
               <>
-                {/* Friend Requests */}
                 {friendRequests.length > 0 && (
                   <>
                     <h3>Friend Requests ({friendRequests.length})</h3>
@@ -290,7 +309,6 @@ function Sidebar({ currentUser, userData, users, selectedUser, onSelectUser, unr
                   </>
                 )}
 
-                {/* Message Requests */}
                 {messageRequests.length > 0 && (
                   <>
                     <h3>Message Requests ({messageRequests.length})</h3>
