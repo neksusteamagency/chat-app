@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { db, messaging, onMessage } from '../firebase'
+import { db } from '../firebase'
 import {
-  collection, addDoc, query, orderBy, limit,
+  collection, addDoc, query, orderBy,
   onSnapshot, serverTimestamp, where,
   updateDoc, doc, setDoc, getDocs, deleteDoc, getDoc,
-  getDocs as getDocsOnce, startAfter, limitToLast
+  startAfter, limitToLast
 } from 'firebase/firestore'
 import Message from './Message'
 import EmojiPicker from 'emoji-picker-react'
@@ -30,12 +30,14 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [firstDoc, setFirstDoc] = useState(null)
+  const [messagesReady, setMessagesReady] = useState(false)
 
   const bottomRef = useRef(null)
-  const topRef = useRef(null)
   const typingTimeout = useRef(null)
   const isInitialLoad = useRef(true)
   const messagesContainerRef = useRef(null)
+  const selectedUserRef = useRef(selectedUser)
+  const isSending = useRef(false)
 
   const getAvatar = (name) => name?.charAt(0).toUpperCase()
   const colors = ['#7c6aff', '#ff6b9d', '#4ecdc4', '#ffa726', '#66bb6a', '#ef5350']
@@ -47,9 +49,14 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
   // Reset on user change
   useEffect(() => {
     isInitialLoad.current = true
+    selectedUserRef.current = selectedUser
     setMessages([])
     setFirstDoc(null)
     setHasMore(false)
+    setMessagesReady(false)
+    setFriendStatus(null)
+    setInput('')
+    isSending.current = false
   }, [selectedUser])
 
   // Check friend status
@@ -71,17 +78,6 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     checkFriendStatus()
   }, [selectedUser])
 
-  // Foreground notifications
-  useEffect(() => {
-    const unsubscribe = onMessage(messaging, (payload) => {
-      const { title, body } = payload.notification
-      if (Notification.permission === 'granted') {
-        new Notification(title, { body, icon: '/pwa-192x192.png' })
-      }
-    })
-    return () => unsubscribe()
-  }, [])
-
   // Load deletedAt
   useEffect(() => {
     if (!selectedUser) return
@@ -98,7 +94,7 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     loadDeletedAt()
   }, [selectedUser])
 
-  // Messages listener — last PAGE_SIZE messages, real-time
+  // Messages listener
   useEffect(() => {
     if (!selectedUser) return
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
@@ -109,6 +105,8 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
       limitToLast(PAGE_SIZE)
     )
     const unsubscribe = onSnapshot(q, async (snapshot) => {
+      if (selectedUserRef.current?.uid !== selectedUser.uid) return
+
       const allMessages = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
       const filtered = deletedAt
         ? allMessages.filter((m) => {
@@ -118,6 +116,8 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         : allMessages
 
       setMessages(filtered)
+      setMessagesReady(true)
+
       if (snapshot.docs.length >= PAGE_SIZE) {
         setHasMore(true)
         setFirstDoc(snapshot.docs[0])
@@ -125,7 +125,6 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         setHasMore(false)
       }
 
-      // Mark as read
       snapshot.docs
         .filter((d) => d.data().read === false && d.data().senderId === selectedUser.uid)
         .forEach(async (message) => {
@@ -145,36 +144,26 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
       where('chatId', '==', chatId),
       orderBy('createdAt', 'asc'),
       limitToLast(PAGE_SIZE),
-      startAfter(firstDoc) // going backwards
+      startAfter(firstDoc)
     )
-
-    // Save scroll position before loading
     const container = messagesContainerRef.current
     const prevScrollHeight = container?.scrollHeight || 0
-
     const snapshot = await getDocs(q)
     if (snapshot.empty) {
       setHasMore(false)
       setLoadingMore(false)
       return
     }
-
     const older = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
     setMessages((prev) => [...older, ...prev])
     setFirstDoc(snapshot.docs[0])
     if (snapshot.docs.length < PAGE_SIZE) setHasMore(false)
-
-    // Restore scroll position
     requestAnimationFrame(() => {
-      if (container) {
-        container.scrollTop = container.scrollHeight - prevScrollHeight
-      }
+      if (container) container.scrollTop = container.scrollHeight - prevScrollHeight
     })
-
     setLoadingMore(false)
   }
 
-  // Scroll handler — load more when near top
   const handleScroll = () => {
     const container = messagesContainerRef.current
     if (!container) return
@@ -193,14 +182,14 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     return () => unsubscribe()
   }, [selectedUser])
 
-  // Scroll to bottom
-useEffect(() => {
-  if (messages.length === 0) return
-  if (isInitialLoad.current) {
-    bottomRef.current?.scrollIntoView({ behavior: 'instant' })
-    isInitialLoad.current = false
-  }
-}, [messages])
+  // Scroll to bottom on initial load only
+  useEffect(() => {
+    if (messages.length === 0 || !messagesReady) return
+    if (isInitialLoad.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'instant' })
+      isInitialLoad.current = false
+    }
+  }, [messages, messagesReady])
 
   const handleTyping = (e) => {
     setInput(e.target.value)
@@ -213,28 +202,36 @@ useEffect(() => {
   }
 
   const sendMessage = async () => {
-    if (input.trim() === '') return
-    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
-    await addDoc(collection(db, 'messages'), {
-      chatId,
-      text: input,
-      senderId: currentUser.uid,
-      receiverId: selectedUser.uid,
-      createdAt: serverTimestamp(),
-      read: false
-    })
-    await addDoc(collection(db, 'notifications'), {
-      type: 'new_message',
-      fromUid: currentUser.uid,
-      fromUsername: userData?.displayUsername || '',
-      toUid: selectedUser.uid,
-      message: input.length > 50 ? input.substring(0, 50) + '...' : input,
-      read: false,
-      createdAt: serverTimestamp(),
-    })
+    if (input.trim() === '' || isSending.current) return
+    isSending.current = true
+    const textToSend = input.trim()
     setInput('')
-    const typingRef = doc(db, 'typing', `${currentUser.uid}_${selectedUser.uid}`)
-    setDoc(typingRef, { typing: false })
+    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+    try {
+      await addDoc(collection(db, 'messages'), {
+        chatId,
+        text: textToSend,
+        senderId: currentUser.uid,
+        receiverId: selectedUser.uid,
+        createdAt: serverTimestamp(),
+        read: false
+      })
+      await addDoc(collection(db, 'notifications'), {
+        type: 'new_message',
+        fromUid: currentUser.uid,
+        fromUsername: userData?.displayUsername || '',
+        toUid: selectedUser.uid,
+        message: textToSend.length > 50 ? textToSend.substring(0, 50) + '...' : textToSend,
+        read: false,
+        createdAt: serverTimestamp(),
+      })
+      const typingRef = doc(db, 'typing', `${currentUser.uid}_${selectedUser.uid}`)
+      setDoc(typingRef, { typing: false })
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    } catch (_) {
+      setInput(textToSend)
+    }
+    isSending.current = false
   }
 
   const handleAddFriend = async () => {
@@ -369,24 +366,28 @@ useEffect(() => {
       </div>
 
       <div
-        className="messages-container"
+        className={`messages-container ${!messagesReady ? 'not-ready' : ''}`}
         ref={messagesContainerRef}
         onScroll={handleScroll}
       >
-        {loadingMore && (
-          <div className="load-more-indicator">
-            <div className="typing-indicator"><span></span><span></span><span></span></div>
-          </div>
+        {messagesReady && (
+          <>
+            {loadingMore && (
+              <div className="load-more-indicator">
+                <div className="typing-indicator"><span></span><span></span><span></span></div>
+              </div>
+            )}
+            {messages.map((message) => (
+              <Message key={message.id} message={message} currentUser={currentUser} />
+            ))}
+            {isTyping && (
+              <div className="typing-indicator">
+                <span></span><span></span><span></span>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </>
         )}
-        {messages.map((message) => (
-          <Message key={message.id} message={message} currentUser={currentUser} />
-        ))}
-        {isTyping && (
-          <div className="typing-indicator">
-            <span></span><span></span><span></span>
-          </div>
-        )}
-        <div ref={bottomRef} />
       </div>
 
       <div className="message-input-row">

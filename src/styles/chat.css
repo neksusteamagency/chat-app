@@ -1815,3 +1815,16 @@ body[data-theme="light"] .not-found { color: rgba(0, 0, 0, 0.35); }
   align-items: center;
   justify-content: center;
 }
+
+.messages-container.not-ready {
+  visibility: hidden;
+}
+.messages-container.not-ready {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.messages-container {
+  opacity: 1;
+  transition: opacity 0.15s ease;
+}
