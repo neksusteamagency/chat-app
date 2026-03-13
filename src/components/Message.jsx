@@ -1,25 +1,73 @@
 import { db } from '../firebase'
-import { doc, updateDoc, deleteDoc } from 'firebase/firestore'
-import { useState } from 'react'
+import { doc, updateDoc } from 'firebase/firestore'
+import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
 
-function Message({ message, currentUser }) {
+function Message({ message, currentUser, onReply }) {
   const isSent = currentUser?.uid ? message.senderId === currentUser.uid : false
   const isPending = message.pending === true
-  const [showReactions, setShowReactions] = useState(false)
+  const [showMenu, setShowMenu] = useState(false)
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 })
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState(message.text)
+  const longPressTimer = useRef(null)
+  const menuRef = useRef(null)
+  const messageRef = useRef(null)
 
   if (!currentUser?.uid) return null
 
   const formatTime = (timestamp) => {
     if (!timestamp) return ''
-    const date = timestamp.toDate()
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp)
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  const openMenu = (x, y) => {
+    const menuWidth = 200
+    const menuHeight = 280
+    const adjustedX = x + menuWidth > window.innerWidth ? x - menuWidth : x
+    const adjustedY = y + menuHeight > window.innerHeight ? y - menuHeight : y
+    setMenuPos({ x: adjustedX, y: adjustedY })
+    setShowMenu(true)
+  }
+
+  const handleTouchStart = (e) => {
+    if (message.deleted || isPending) return
+    const touch = e.touches[0]
+    longPressTimer.current = setTimeout(() => {
+      openMenu(touch.clientX, touch.clientY)
+      if (navigator.vibrate) navigator.vibrate(50)
+    }, 500)
+  }
+
+  const handleTouchEnd = () => clearTimeout(longPressTimer.current)
+  const handleTouchMove = () => clearTimeout(longPressTimer.current)
+
+  const handleContextMenu = (e) => {
+    if (message.deleted || isPending) return
+    e.preventDefault()
+    openMenu(e.clientX, e.clientY)
+  }
+
+  useEffect(() => {
+    if (!showMenu) return
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setShowMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('touchstart', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('touchstart', handleClickOutside)
+    }
+  }, [showMenu])
+
   const deleteMessage = async () => {
+    setShowMenu(false)
     await updateDoc(doc(db, 'messages', message.id), { deleted: true, text: '' })
   }
 
@@ -32,7 +80,7 @@ function Message({ message, currentUser }) {
       : [...users, currentUser.uid]
     const updatedReactions = { ...reactions, [emoji]: updatedUsers }
     await updateDoc(doc(db, 'messages', message.id), { reactions: updatedReactions })
-    setShowReactions(false)
+    setShowMenu(false)
   }
 
   const handleEdit = async () => {
@@ -46,83 +94,117 @@ function Message({ message, currentUser }) {
     const reactions = message.reactions || {}
     return Object.entries(reactions).filter(([_, users]) => users.length > 0)
   }
-  // Deleted message
+
+  // Time + read receipt footer (shown inside bubble)
+  const renderFooter = () => (
+    <span className="message-footer">
+      {isPending ? '🕐' : formatTime(message.createdAt)}
+      {isSent && !isPending && (
+        <span className={`read-receipt ${message.read ? 'read' : 'sent'}`}>
+          {message.read ? '✓✓' : '✓'}
+        </span>
+      )}
+    </span>
+  )
+
   if (message.deleted) {
     return (
       <div className={`message-row ${isSent ? 'sent' : 'received'}`}>
         <div className="message-bubble deleted-bubble">
-          🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}
+          <span>🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}</span>
+          {renderFooter()}
         </div>
-<span className="message-time">
-  {isPending ? '🕐' : formatTime(message.createdAt)}
-</span>
       </div>
     )
   }
 
   return (
-    <div
-      className={`message-row ${isSent ? 'sent' : 'received'}`}
-      onMouseEnter={() => !isEditing && setShowReactions(true)}
-      onMouseLeave={() => !isEditing && setShowReactions(false)}
-    >
-      <div className="message-actions">
-        {showReactions && (
-          <div className={`reaction-picker ${isSent ? 'sent' : 'received'}`}>
+    <>
+      <div
+        ref={messageRef}
+        className={`message-row ${isSent ? 'sent' : 'received'}`}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMove}
+        onContextMenu={handleContextMenu}
+      >
+        {message.replyTo && (
+          <div className="reply-preview">
+            <span className="reply-author">{message.replyTo.senderName}</span>
+            <span className="reply-text">{message.replyTo.text}</span>
+          </div>
+        )}
+
+        {isEditing ? (
+          <div className="edit-bubble">
+            <input
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleEdit()
+                if (e.key === 'Escape') setIsEditing(false)
+              }}
+              autoFocus
+            />
+            <div className="edit-actions">
+              <button className="edit-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
+              <button className="edit-save" onClick={handleEdit}>Save</button>
+            </div>
+          </div>
+        ) : (
+          <div className="message-bubble">
+            <span className="message-text">{message.text}</span>
+            {message.edited && <span className="edited-tag"> (edited)</span>}
+            {renderFooter()}
+          </div>
+        )}
+
+        {getReactionSummary().length > 0 && (
+          <div className="reactions-display">
+            {getReactionSummary().map(([emoji, users]) => (
+              <button
+                key={emoji}
+                className={`reaction-badge ${users.includes(currentUser.uid) ? 'reacted' : ''}`}
+                onClick={() => handleReaction(emoji)}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showMenu && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={menuRef}
+          className="message-context-menu"
+          style={{ top: menuPos.y, left: menuPos.x }}
+        >
+          <div className="context-reactions">
             {REACTIONS.map((emoji) => (
               <button key={emoji} onClick={() => handleReaction(emoji)}>
                 {emoji}
               </button>
             ))}
           </div>
-        )}
-        {showReactions && isSent && (
-          <button className="edit-msg-btn" onClick={() => { setIsEditing(true); setShowReactions(false) }}>✏️</button>
-        )}
-        {showReactions && isSent && (
-          <button className="delete-msg-btn" onClick={deleteMessage}>🗑️</button>
-        )}
-      </div>
-
-      {isEditing ? (
-        <div className="edit-bubble">
-          <input
-            value={editText}
-            onChange={(e) => setEditText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleEdit()
-              if (e.key === 'Escape') setIsEditing(false)
-            }}
-            autoFocus
-          />
-          <div className="edit-actions">
-            <button className="edit-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
-            <button className="edit-save" onClick={handleEdit}>Save</button>
-          </div>
-        </div>
-      ) : (
-        <div className="message-bubble">
-          {message.text}
-          {message.edited && <span className="edited-tag"> (edited)</span>}
-        </div>
-      )}
-
-      {getReactionSummary().length > 0 && (
-        <div className="reactions-display">
-          {getReactionSummary().map(([emoji, users]) => (
-            <button
-              key={emoji}
-              className={`reaction-badge ${users.includes(currentUser.uid) ? 'reacted' : ''}`}
-              onClick={() => handleReaction(emoji)}
-            >
-              {emoji}
+          <div className="context-divider" />
+          <button className="context-action" onClick={() => { onReply && onReply(message); setShowMenu(false) }}>
+            ↩️ Reply
+          </button>
+          {isSent && (
+            <button className="context-action" onClick={() => { setIsEditing(true); setShowMenu(false) }}>
+              ✏️ Edit
             </button>
-          ))}
-        </div>
+          )}
+          {isSent && (
+            <button className="context-action danger" onClick={deleteMessage}>
+              🗑️ Delete
+            </button>
+          )}
+        </div>,
+        document.body
       )}
-
-      <span className="message-time">{formatTime(message.createdAt)}</span>
-    </div>
+    </>
   )
 }
 
