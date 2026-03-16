@@ -12,6 +12,33 @@ import EmojiPicker from 'emoji-picker-react'
 
 const PAGE_SIZE = 30
 
+// ✅ Fix 2: Cache helpers — store last messages per chat in localStorage
+const getCachedMessages = (chatId) => {
+  try {
+    const raw = localStorage.getItem(`chat_cache_${chatId}`)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+const setCachedMessages = (chatId, messages) => {
+  try {
+    const toCache = messages
+      .filter((m) => !m.pending)
+      .slice(-30)
+      .map((m) => ({
+        ...m,
+        createdAt: m.createdAt?.toDate ? m.createdAt.toDate().toISOString() : m.createdAt,
+        readAt: m.readAt?.toDate ? m.readAt.toDate().toISOString() : m.readAt,
+        deliveredAt: m.deliveredAt?.toDate ? m.deliveredAt.toDate().toISOString() : m.deliveredAt,
+      }))
+    localStorage.setItem(`chat_cache_${chatId}`, JSON.stringify(toCache))
+  } catch {
+    // localStorage might be full, silently fail
+  }
+}
+
 function ChatWindow({ currentUser, userData, selectedUser, onClose, className, onBlockUser, pinnedChats, onPinChat }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -31,18 +58,13 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [firstDoc, setFirstDoc] = useState(null)
-  const [messagesReady, setMessagesReady] = useState(false)
-  const [showMessages, setShowMessages] = useState(false)
   const [replyTo, setReplyTo] = useState(null)
   const [mutualFriends, setMutualFriends] = useState(0)
-
-  // ✅ Live presence from RTDB
+  const [isLoading, setIsLoading] = useState(true) // ✅ Fix 3: skeleton state
   const [isOnline, setIsOnline] = useState(false)
   const [lastSeen, setLastSeen] = useState(null)
 
-  const bottomRef = useRef(null)
   const typingTimeout = useRef(null)
-  const isInitialLoad = useRef(true)
   const messagesContainerRef = useRef(null)
   const selectedUserRef = useRef(selectedUser)
   const isSending = useRef(false)
@@ -54,7 +76,6 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
   const sharedInterests = (currentUser?.interests || []).filter(i => selectedUser?.interests?.includes(i))
   const sharedLanguages = (currentUser?.languages || []).filter(l => selectedUser?.languages?.includes(l))
 
-  // ✅ Respect privacy settings
   const canShowOnline = selectedUser?.showOnline !== false
   const canShowLastSeen = selectedUser?.showLastSeen !== false
   const displayOnline = isOnline && canShowOnline
@@ -78,7 +99,7 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     return 'Offline'
   }
 
-  // ✅ Listen directly to RTDB for this user's presence
+  // Live presence from RTDB
   useEffect(() => {
     if (!selectedUser?.uid) return
     const statusRef = ref(rtdb, `status/${selectedUser.uid}`)
@@ -95,22 +116,27 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     return () => unsub()
   }, [selectedUser?.uid])
 
-  // Reset on user change
+  // ✅ Fix 2: Reset + load cache instantly on user change so UI is never blank
   useEffect(() => {
-    isInitialLoad.current = true
+    if (!selectedUser?.uid) return
     selectedUserRef.current = selectedUser
+    setIsLoading(true)
     setMessages([])
     setFirstDoc(null)
     setHasMore(false)
-    setMessagesReady(false)
-    setShowMessages(false)
     setFriendStatus(null)
     setInput('')
     setMutualFriends(0)
     setIsOnline(false)
     setLastSeen(null)
     isSending.current = false
-    setShowMessages(true)
+
+    const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+    const cached = getCachedMessages(chatId)
+    if (cached.length > 0) {
+      setMessages(cached)
+      setIsLoading(false)
+    }
   }, [selectedUser?.uid])
 
   // Mutual friends count
@@ -189,6 +215,7 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     )
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       if (selectedUserRef.current?.uid !== selectedUser.uid) return
+
       const allMessages = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
       const filtered = deletedAt
         ? allMessages.filter((m) => {
@@ -205,7 +232,9 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         return [...filtered, ...stillPending]
       })
 
-      setMessagesReady(true)
+      // ✅ Fix 2: Update cache with fresh data from Firestore
+      setCachedMessages(chatId, filtered)
+      setIsLoading(false)
 
       if (snapshot.docs.length >= PAGE_SIZE) {
         setHasMore(true)
@@ -214,15 +243,31 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         setHasMore(false)
       }
 
-      const unreadMessages = snapshot.docs.filter(
-        (d) => d.data().read === false && d.data().receiverId === currentUser.uid
+      // ✅ Mark as delivered immediately
+      const undeliveredMessages = snapshot.docs.filter(
+        (d) => d.data().delivered === false && d.data().receiverId === currentUser.uid
       )
-      unreadMessages.forEach(async (message) => {
+      undeliveredMessages.forEach(async (message) => {
         await updateDoc(doc(db, 'messages', message.id), {
-          read: true,
-          readAt: serverTimestamp()
+          delivered: true,
+          deliveredAt: serverTimestamp()
         })
       })
+
+      // ✅ Mark as read only if tab is visible, with delay so sender sees 2 grey ticks first
+      const isViewingChat = document.visibilityState === 'visible'
+      if (isViewingChat) {
+        setTimeout(() => {
+          snapshot.docs
+            .filter((d) => d.data().read === false && d.data().receiverId === currentUser.uid)
+            .forEach(async (message) => {
+              await updateDoc(doc(db, 'messages', message.id), {
+                read: true,
+                readAt: serverTimestamp()
+              })
+            })
+        }, 1000)
+      }
     })
     return () => unsubscribe()
   }, [selectedUser?.uid, deletedAt])
@@ -262,6 +307,7 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     if (container.scrollTop < 50 && hasMore && !loadingMore) loadMoreMessages()
   }
 
+  // Typing indicator listener
   useEffect(() => {
     if (!selectedUser) return
     const typingRef = doc(db, 'typing', `${selectedUser.uid}_${currentUser.uid}`)
@@ -270,16 +316,6 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     })
     return () => unsubscribe()
   }, [selectedUser?.uid])
-
-  useEffect(() => {
-    if (messages.length === 0 || !messagesReady) return
-    if (isInitialLoad.current) {
-      requestAnimationFrame(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'instant' })
-        isInitialLoad.current = false
-      })
-    }
-  }, [messages, messagesReady])
 
   const handleTyping = (e) => {
     setInput(e.target.value)
@@ -305,10 +341,10 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
       receiverId: selectedUser.uid,
       createdAt: { toDate: () => new Date() },
       read: false,
+      delivered: false,
       pending: true,
     }
     setMessages((prev) => [...prev, tempMessage])
-    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
 
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
     try {
@@ -319,6 +355,7 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         receiverId: selectedUser.uid,
         createdAt: serverTimestamp(),
         read: false,
+        delivered: false,
         ...(replyTo && {
           replyTo: {
             text: replyTo.text,
@@ -474,28 +511,46 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         </div>
       </div>
 
+      {/*
+        ✅ Fix 1: flex-direction: column-reverse
+        Messages naturally sit at the bottom — zero scroll jumping needed.
+        We reverse the array so newest still appears at bottom visually.
+      */}
       <div
-        className={`messages-container ${showMessages ? 'messages-visible' : 'messages-hidden'}`}
+        className="messages-container"
         ref={messagesContainerRef}
         onScroll={handleScroll}
+        style={{ display: 'flex', flexDirection: 'column-reverse', overflowY: 'auto' }}
       >
-        {loadingMore && (
-          <div style={{ textAlign: 'center', padding: '10px', color: 'rgba(255,255,255,0.3)' }}>Loading...</div>
-        )}
-        {messages.map((message) => (
-          <Message
-            key={message.id}
-            message={message}
-            currentUser={currentUser}
-            onReply={(msg) => setReplyTo(msg)}
-          />
-        ))}
-        {isTyping && (
-          <div className="typing-indicator">
-            <span></span><span></span><span></span>
+        {isLoading && messages.length === 0 ? (
+          // ✅ Fix 3: Skeleton loader — no more blank flash while waiting for Firestore
+          <div className="messages-skeleton">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className={`skeleton-row ${i % 2 === 0 ? 'sent' : 'received'}`}>
+                <div className="skeleton-bubble" style={{ width: `${100 + (i * 40) % 120}px` }} />
+              </div>
+            ))}
           </div>
+        ) : (
+          <>
+            {isTyping && (
+              <div className="typing-indicator">
+                <span></span><span></span><span></span>
+              </div>
+            )}
+            {[...messages].reverse().map((message) => (
+              <Message
+                key={message.id}
+                message={message}
+                currentUser={currentUser}
+                onReply={(msg) => setReplyTo(msg)}
+              />
+            ))}
+            {loadingMore && (
+              <div style={{ textAlign: 'center', padding: '10px', color: 'rgba(255,255,255,0.3)' }}>Loading...</div>
+            )}
+          </>
         )}
-        <div ref={bottomRef}></div>
       </div>
 
       {replyTo && (

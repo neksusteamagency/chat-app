@@ -100,8 +100,8 @@ const renderFooter = () => (
   <div className="message-footer">
     {isPending ? '🕐' : formatTime(message.createdAt)}
     {isSent && !isPending && (
-      <span className={`read-receipt ${message.read ? 'read' : 'sent'}`}>
-        {message.read ? '✓✓' : '✓'}
+      <span className={`read-receipt ${message.read ? 'read' : message.delivered ? 'delivered' : 'sent'}`}>
+        {message.read ? '✓✓' : message.delivered ? '✓✓' : '✓'}
       </span>
     )}
   </div>
