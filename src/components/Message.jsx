@@ -5,7 +5,18 @@ import { createPortal } from 'react-dom'
 
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
 
-function Message({ message, currentUser, onReply }) {
+// ✅ Highlights matching search text inside a message
+const highlightText = (text, query) => {
+  if (!query || !query.trim()) return text
+  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
+  return parts.map((part, i) =>
+    part.toLowerCase() === query.toLowerCase()
+      ? <mark key={i} className="message-highlight">{part}</mark>
+      : part
+  )
+}
+
+function Message({ message, currentUser, onReply, searchQuery = '' }) {
   const isSent = currentUser?.uid ? message.senderId === currentUser.uid : false
   const isPending = message.pending === true
   const [showMenu, setShowMenu] = useState(false)
@@ -95,122 +106,128 @@ function Message({ message, currentUser, onReply }) {
     return Object.entries(reactions).filter(([_, users]) => users.length > 0)
   }
 
-  // Improved read receipt rendering
-const renderFooter = () => (
-  <div className="message-footer">
-    {isPending ? '🕐' : formatTime(message.createdAt)}
-    {isSent && !isPending && (
-      <span className={`read-receipt ${message.read ? 'read' : message.delivered ? 'delivered' : 'sent'}`}>
-        {message.read ? '✓✓' : message.delivered ? '✓✓' : '✓'}
-      </span>
-    )}
-  </div>
-)
-
-if (message.deleted) {
-  return (
-    <div className={`message-row ${isSent ? 'sent' : 'received'}`}>
-      <div className="message-bubble deleted-bubble">
-        🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}
-        {renderFooter()}
-      </div>
+  const renderFooter = () => (
+    <div className="message-footer">
+      {isPending ? '🕐' : formatTime(message.createdAt)}
+      {isSent && !isPending && (
+        <span className={`read-receipt ${message.read ? 'read' : message.delivered ? 'delivered' : 'sent'}`}>
+          {message.read ? '✓✓' : message.delivered ? '✓✓' : '✓'}
+        </span>
+      )}
     </div>
   )
-}
 
-return (
-  <>
-    <div
-      className={`message-row ${isSent ? 'sent' : 'received'}`}
-      ref={messageRef}
-      onContextMenu={handleContextMenu}
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
-      onTouchMove={handleTouchMove}
-    >
-      {message.replyTo && (
-        <div className="reply-preview">
-          <div className="reply-author">{message.replyTo.senderName}</div>
-          <div className="reply-text">{message.replyTo.text}</div>
-        </div>
-      )}
-
-      {isEditing ? (
-        <div className="edit-bubble">
-          <input
-            type="text"
-            value={editText}
-            onChange={(e) => setEditText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleEdit()
-              if (e.key === 'Escape') setIsEditing(false)
-            }}
-            autoFocus
-          />
-          <div className="edit-actions">
-            <button className="edit-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
-            <button className="edit-save" onClick={handleEdit}>Save</button>
-          </div>
-        </div>
-      ) : (
-        <div className="message-bubble">
-          <div className="message-text">
-            {message.text}
-            {message.edited && <span className="edited-tag"> (edited)</span>}
-          </div>
+  if (message.deleted) {
+    return (
+      <div className={`message-row ${isSent ? 'sent' : 'received'}`}>
+        <div className="message-bubble deleted-bubble">
+          🚫 {isSent ? 'You deleted this message' : 'This message was deleted'}
           {renderFooter()}
         </div>
-      )}
+      </div>
+    )
+  }
 
-      {getReactionSummary().length > 0 && (
-        <div className="reactions-display">
-          {getReactionSummary().map(([emoji, users]) => (
-            <span
-              key={emoji}
-              className={`reaction-badge ${users.includes(currentUser.uid) ? 'reacted' : ''}`}
-              onClick={() => handleReaction(emoji)}
-            >
-              {emoji} {users.length}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
+  // ✅ Highlight the message row if it matches the search
+  const isSearchMatch = searchQuery && message.text?.toLowerCase().includes(searchQuery.toLowerCase())
 
-    {showMenu && typeof document !== 'undefined' && createPortal(
+  return (
+    <>
       <div
-        className="message-context-menu"
-        ref={menuRef}
-        style={{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }}
+        className={`message-row ${isSent ? 'sent' : 'received'} ${isSearchMatch ? 'search-match' : ''}`}
+        ref={messageRef}
+        onContextMenu={handleContextMenu}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMove}
       >
-        <div className="context-reactions">
-          {REACTIONS.map((emoji) => (
-            <button key={emoji} onClick={() => handleReaction(emoji)}>
-              {emoji}
+        {message.replyTo && (
+          <div className="reply-preview">
+            <div className="reply-author">{message.replyTo.senderName}</div>
+            <div className="reply-text">{message.replyTo.text}</div>
+          </div>
+        )}
+
+        {isEditing ? (
+          <div className="edit-bubble">
+            <input
+              type="text"
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleEdit()
+                if (e.key === 'Escape') setIsEditing(false)
+              }}
+              autoFocus
+            />
+            <div className="edit-actions">
+              <button className="edit-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
+              <button className="edit-save" onClick={handleEdit}>Save</button>
+            </div>
+          </div>
+        ) : (
+          <div className="message-bubble">
+            <div className="message-text">
+              {/* ✅ Show highlighted text when searching, plain text otherwise */}
+              {searchQuery ? highlightText(message.text, searchQuery) : message.text}
+              {message.edited && <span className="edited-tag"> (edited)</span>}
+            </div>
+            {renderFooter()}
+          </div>
+        )}
+
+        {getReactionSummary().length > 0 && (
+          <div className="reactions-display">
+            {getReactionSummary().map(([emoji, users]) => (
+              <span
+                key={emoji}
+                className={`reaction-badge ${users.includes(currentUser.uid) ? 'reacted' : ''}`}
+                onClick={() => handleReaction(emoji)}
+              >
+                {emoji} {users.length}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showMenu && typeof document !== 'undefined' && createPortal(
+        <div
+          className="message-context-menu"
+          ref={menuRef}
+          style={{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }}
+        >
+          {!isSent && (
+            <>
+              <div className="context-reactions">
+                {REACTIONS.map((emoji) => (
+                  <button key={emoji} onClick={() => handleReaction(emoji)}>
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+              <div className="context-divider"></div>
+            </>
+          )}
+
+          <button className="context-action" onClick={() => { onReply && onReply(message); setShowMenu(false) }}>
+            ↩️ Reply
+          </button>
+          {isSent && (
+            <button className="context-action" onClick={() => { setIsEditing(true); setShowMenu(false) }}>
+              ✏️ Edit
             </button>
-          ))}
-        </div>
-
-        <div className="context-divider"></div>
-
-        <button className="context-action" onClick={() => { onReply && onReply(message); setShowMenu(false) }}>
-          ↩️ Reply
-        </button>
-        {isSent && (
-          <button className="context-action" onClick={() => { setIsEditing(true); setShowMenu(false) }}>
-            ✏️ Edit
-          </button>
-        )}
-        {isSent && (
-          <button className="context-action danger" onClick={deleteMessage}>
-            🗑️ Delete
-          </button>
-        )}
-      </div>,
-      document.body
-    )}
-  </>
-)
+          )}
+          {isSent && (
+            <button className="context-action danger" onClick={deleteMessage}>
+              🗑️ Delete
+            </button>
+          )}
+        </div>,
+        document.body
+      )}
+    </>
+  )
 }
 
 export default Message

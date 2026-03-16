@@ -7,6 +7,7 @@ import {
   startAfter, limitToLast
 } from 'firebase/firestore'
 import { ref, onValue } from 'firebase/database'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import Message from './Message'
 import EmojiPicker from 'emoji-picker-react'
 
@@ -59,8 +60,12 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
   const [loadingMore, setLoadingMore] = useState(false)
   const [firstDoc, setFirstDoc] = useState(null)
   const [replyTo, setReplyTo] = useState(null)
-  const [mutualFriends, setMutualFriends] = useState(0)
-  const [isLoading, setIsLoading] = useState(true) // ✅ Fix 3: skeleton state
+  const [mutualFriends, setMutualFriends] = useState([])
+  const [showMutualFriends, setShowMutualFriends] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchInputRef = useRef(null)
   const [isOnline, setIsOnline] = useState(false)
   const [lastSeen, setLastSeen] = useState(null)
 
@@ -68,6 +73,8 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
   const messagesContainerRef = useRef(null)
   const selectedUserRef = useRef(selectedUser)
   const isSending = useRef(false)
+  const isActiveChat = useRef(true)
+  const markAsReadFn = httpsCallable(getFunctions(), 'markMessagesAsRead')
 
   const getAvatar = (name) => name?.charAt(0).toUpperCase()
   const colors = ['#7c6aff', '#ff6b9d', '#4ecdc4', '#ffa726', '#66bb6a', '#ef5350']
@@ -99,6 +106,23 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     return 'Offline'
   }
 
+  // Track whether the user is actively looking at this chat
+  useEffect(() => {
+    const onFocus = () => { isActiveChat.current = true }
+    const onBlur = () => { isActiveChat.current = false }
+    const onVisible = () => { isActiveChat.current = document.visibilityState === 'visible' }
+
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onBlur)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+
   // Live presence from RTDB
   useEffect(() => {
     if (!selectedUser?.uid) return
@@ -126,9 +150,7 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
     setHasMore(false)
     setFriendStatus(null)
     setInput('')
-    setMutualFriends(0)
-    setIsOnline(false)
-    setLastSeen(null)
+
     isSending.current = false
 
     const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
@@ -159,11 +181,22 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         ...their1.docs.map(d => d.data().receiverId),
         ...their2.docs.map(d => d.data().senderId),
       ])
-      let count = 0
+
+      // Collect mutual UIDs (exclude the selected user themselves)
+      const mutualUids = []
       myFriendUids.forEach(uid => {
-        if (uid !== selectedUser.uid && theirFriendUids.has(uid)) count++
+        if (uid !== selectedUser.uid && theirFriendUids.has(uid)) mutualUids.push(uid)
       })
-      setMutualFriends(count)
+
+      // Fetch user data for each mutual friend
+      const userDocs = await Promise.all(
+        mutualUids.map(uid => getDoc(doc(db, 'users', uid)))
+      )
+      const mutualUsers = userDocs
+        .filter(d => d.exists())
+        .map(d => ({ uid: d.id, ...d.data() }))
+
+      setMutualFriends(mutualUsers)
     }
     getMutualFriends()
   }, [selectedUser?.uid])
@@ -243,30 +276,16 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         setHasMore(false)
       }
 
-      // ✅ Mark as delivered immediately
-      const undeliveredMessages = snapshot.docs.filter(
-        (d) => d.data().delivered === false && d.data().receiverId === currentUser.uid
-      )
-      undeliveredMessages.forEach(async (message) => {
-        await updateDoc(doc(db, 'messages', message.id), {
-          delivered: true,
-          deliveredAt: serverTimestamp()
-        })
-      })
-
-      // ✅ Mark as read only if tab is visible, with delay so sender sees 2 grey ticks first
-      const isViewingChat = document.visibilityState === 'visible'
-      if (isViewingChat) {
-        setTimeout(() => {
-          snapshot.docs
-            .filter((d) => d.data().read === false && d.data().receiverId === currentUser.uid)
-            .forEach(async (message) => {
-              await updateDoc(doc(db, 'messages', message.id), {
-                read: true,
-                readAt: serverTimestamp()
-              })
-            })
-        }, 1000)
+      // ✅ Delivered is now handled by the Cloud Function onMessageCreated
+      // ✅ Mark as read via Cloud Function — only if user is actively in this chat
+      if (isActiveChat.current) {
+        const chatId = [currentUser.uid, selectedUser.uid].sort().join('_')
+        const hasUnread = snapshot.docs.some(
+          (d) => d.data().read === false && d.data().receiverId === currentUser.uid
+        )
+        if (hasUnread) {
+          markAsReadFn({ chatId }).catch((err) => console.error('markAsRead error:', err))
+        }
       }
     })
     return () => unsubscribe()
@@ -495,6 +514,9 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
             <button className="menu-btn" onClick={() => setShowMenu(!showMenu)}>⋮</button>
             {showMenu && (
               <div className="chat-menu">
+                <button onClick={() => { setShowSearch(true); setShowMenu(false); setTimeout(() => searchInputRef.current?.focus(), 100) }}>
+                  🔍 Search Messages
+                </button>
                 <button onClick={() => { onPinChat && onPinChat(selectedUser.uid); setShowMenu(false) }}>
                   📌 {pinnedChats?.includes(selectedUser.uid) ? 'Unpin Chat' : 'Pin Chat'}
                 </button>
@@ -511,11 +533,27 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         </div>
       </div>
 
-      {/*
-        ✅ Fix 1: flex-direction: column-reverse
-        Messages naturally sit at the bottom — zero scroll jumping needed.
-        We reverse the array so newest still appears at bottom visually.
-      */}
+      {/* Search bar */}
+      {showSearch && (
+        <div className="chat-search-bar">
+          <span className="chat-search-icon">🔍</span>
+          <input
+            ref={searchInputRef}
+            type="text"
+            placeholder="Search messages..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="chat-search-input"
+          />
+          {searchQuery && (
+            <span className="chat-search-count">
+              {messages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()) && !m.deleted).length} results
+            </span>
+          )}
+          <button className="chat-search-close" onClick={() => { setShowSearch(false); setSearchQuery('') }}>✕</button>
+        </div>
+      )}
+
       <div
         className="messages-container"
         ref={messagesContainerRef}
@@ -523,7 +561,6 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
         style={{ display: 'flex', flexDirection: 'column-reverse', overflowY: 'auto' }}
       >
         {isLoading && messages.length === 0 ? (
-          // ✅ Fix 3: Skeleton loader — no more blank flash while waiting for Firestore
           <div className="messages-skeleton">
             {[...Array(6)].map((_, i) => (
               <div key={i} className={`skeleton-row ${i % 2 === 0 ? 'sent' : 'received'}`}>
@@ -538,14 +575,72 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
                 <span></span><span></span><span></span>
               </div>
             )}
-            {[...messages].reverse().map((message) => (
-              <Message
-                key={message.id}
-                message={message}
-                currentUser={currentUser}
-                onReply={(msg) => setReplyTo(msg)}
-              />
-            ))}
+            {(() => {
+              const filtered = searchQuery.trim()
+                ? [...messages].filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()) && !m.deleted)
+                : [...messages]
+
+              if (searchQuery.trim() && filtered.length === 0) {
+                return (
+                  <div className="search-no-results">
+                    <span>🔍</span>
+                    <p>No messages found for "{searchQuery}"</p>
+                  </div>
+                )
+              }
+
+              const reversed = [...filtered].reverse()
+
+              const getDateLabel = (timestamp) => {
+                if (!timestamp) return null
+                const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp)
+                const now = new Date()
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+                const yesterday = new Date(today)
+                yesterday.setDate(yesterday.getDate() - 1)
+                const msgDay = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+                if (msgDay.getTime() === today.getTime()) return 'Today'
+                if (msgDay.getTime() === yesterday.getTime()) return 'Yesterday'
+                return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined })
+              }
+
+              const isSameDay = (ts1, ts2) => {
+                if (!ts1 || !ts2) return false
+                const d1 = ts1?.toDate ? ts1.toDate() : new Date(ts1)
+                const d2 = ts2?.toDate ? ts2.toDate() : new Date(ts2)
+                return d1.getFullYear() === d2.getFullYear() &&
+                  d1.getMonth() === d2.getMonth() &&
+                  d1.getDate() === d2.getDate()
+              }
+
+              const items = []
+              reversed.forEach((message, i) => {
+                const nextMessage = reversed[i + 1]
+                items.push(
+                  <Message
+                    key={message.id}
+                    message={message}
+                    currentUser={currentUser}
+                    onReply={(msg) => setReplyTo(msg)}
+                    searchQuery={searchQuery}
+                  />
+                )
+                // In column-reverse, "next" visually is above — so insert separator after
+                // when the next message is on a different day
+                if (!nextMessage || !isSameDay(message.createdAt, nextMessage.createdAt)) {
+                  const label = getDateLabel(message.createdAt)
+                  if (label) {
+                    items.push(
+                      <div key={`date-${message.id}`} className="date-separator">
+                        <span>{label}</span>
+                      </div>
+                    )
+                  }
+                }
+              })
+
+              return items
+            })()}
             {loadingMore && (
               <div style={{ textAlign: 'center', padding: '10px', color: 'rgba(255,255,255,0.3)' }}>Loading...</div>
             )}
@@ -667,7 +762,12 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
             <div className="profile-popup-meta">
               {selectedUser.country && <span>📍 {selectedUser.country}</span>}
               {selectedUser.age && <span>🎂 {selectedUser.age}</span>}
-              {mutualFriends > 0 && <span>👥 {mutualFriends} mutual</span>}
+              <span
+                className="mutual-friends-btn"
+                onClick={(e) => { e.stopPropagation(); setShowMutualFriends(true) }}
+              >
+                👥 {mutualFriends.length > 0 ? `${mutualFriends.length} mutual friend${mutualFriends.length > 1 ? 's' : ''}` : 'No mutual friends'}
+              </span>
             </div>
             {sharedInterests.length > 0 && (
               <div className="profile-popup-section">
@@ -687,6 +787,38 @@ function ChatWindow({ currentUser, userData, selectedUser, onClose, className, o
                     <span key={lang} className="interest-tag">{lang}</span>
                   ))}
                 </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Mutual Friends Modal */}
+      {showMutualFriends && (
+        <div className="confirm-overlay" onClick={() => setShowMutualFriends(false)}>
+          <div className="mutual-friends-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="mutual-friends-header">
+              <h3>👥 Mutual Friends</h3>
+              <button className="profile-popup-close" onClick={() => setShowMutualFriends(false)}>✕</button>
+            </div>
+            {mutualFriends.length === 0 ? (
+              <div className="mutual-friends-empty">
+                <span>🤷</span>
+                <p>No mutual friends yet</p>
+              </div>
+            ) : (
+              <div className="mutual-friends-list">
+                {mutualFriends.map((user) => (
+                  <div key={user.uid} className="mutual-friend-item">
+                    <div className="avatar" style={{ background: getColor(user.displayUsername), width: 40, height: 40, fontSize: 15 }}>
+                      {getAvatar(user.displayUsername)}
+                    </div>
+                    <div className="mutual-friend-info">
+                      <span className="mutual-friend-name">{user.displayUsername}</span>
+                      {user.appId && <span className="mutual-friend-appid">@{user.appId}</span>}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

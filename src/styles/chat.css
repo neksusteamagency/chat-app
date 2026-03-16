@@ -1697,6 +1697,212 @@
   100% { background-position: -200% 0; }
 }
 
+/* ---- DATE SEPARATOR ---- */
+.date-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+  gap: 10px;
+  position: relative;
+}
+
+.date-separator::before,
+.date-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.date-separator span {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  white-space: nowrap;
+  letter-spacing: 0.4px;
+}
+
+/* ---- MESSAGE SEARCH ---- */
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(124, 106, 255, 0.08);
+  border-bottom: 1px solid rgba(124, 106, 255, 0.2);
+  animation: slideDown 0.2s ease;
+}
+
+.chat-search-icon { font-size: 15px; flex-shrink: 0; }
+
+.chat-search-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: white;
+  font-size: 14px;
+  padding: 8px 12px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.chat-search-input::placeholder { color: rgba(255, 255, 255, 0.3); }
+
+.chat-search-input:focus {
+  border-color: #7c6aff;
+  background: rgba(124, 106, 255, 0.1);
+}
+
+.chat-search-count {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chat-search-close {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.5);
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.chat-search-close:hover {
+  background: rgba(255, 80, 80, 0.15);
+  color: #ff6b6b;
+}
+
+/* ✅ Highlight matched text */
+.message-highlight {
+  background: rgba(255, 214, 0, 0.4);
+  color: white;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* ✅ Glow the whole bubble when it's a search match */
+.message-row.search-match .message-bubble {
+  box-shadow: 0 0 0 2px rgba(255, 214, 0, 0.4);
+}
+
+.search-no-results {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 16px;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 14px;
+}
+
+.search-no-results span { font-size: 32px; }
+
+/* ---- MUTUAL FRIENDS ---- */
+.mutual-friends-btn {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.mutual-friends-btn:hover { color: #a89aff; }
+
+.mutual-friends-modal {
+  background: rgba(20, 20, 45, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 24px;
+  width: 90%;
+  max-width: 320px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: slideUp 0.3s ease;
+}
+
+.mutual-friends-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mutual-friends-header h3 {
+  color: white;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.mutual-friends-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 50vh;
+}
+
+.mutual-friends-list::-webkit-scrollbar { width: 3px; }
+.mutual-friends-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
+.mutual-friend-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  transition: background 0.2s ease;
+}
+
+.mutual-friend-item:hover { background: rgba(255, 255, 255, 0.08); }
+
+.mutual-friend-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mutual-friend-name {
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mutual-friend-appid {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
+}
+
+.mutual-friends-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 0;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 14px;
+}
+
+.mutual-friends-empty span { font-size: 32px; }
+
 /* ---- ANIMATIONS ---- */
 @keyframes fadeIn {
   from { opacity: 0; }
