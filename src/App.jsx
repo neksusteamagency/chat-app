@@ -49,11 +49,31 @@ useEffect(() => {
   }
 }, [])
 
-  useEffect(() => {
+useEffect(() => {
   if (user && user.emailVerified && userData) {
     requestNotificationPermission().then(async (token) => {
       if (token) {
-        await setDoc(doc(db, 'users', user.uid), { fcmToken: token }, { merge: true })
+        const userRef = doc(db, 'users', user.uid)
+        const userSnap = await getDoc(userRef)
+        const existing = userSnap.data()?.fcmTokens || []
+        // Only add if not already in the array
+        if (!existing.includes(token)) {
+          await setDoc(userRef, { fcmTokens: [...existing, token] }, { merge: true })
+        }
+      }
+    })
+  }
+}, [user, userData])useEffect(() => {
+  if (user && user.emailVerified && userData) {
+    requestNotificationPermission().then(async (token) => {
+      if (token) {
+        const userRef = doc(db, 'users', user.uid)
+        const userSnap = await getDoc(userRef)
+        const existing = userSnap.data()?.fcmTokens || []
+        // Only add if not already in the array
+        if (!existing.includes(token)) {
+          await setDoc(userRef, { fcmTokens: [...existing, token] }, { merge: true })
+        }
       }
     })
   }

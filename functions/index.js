@@ -6,6 +6,7 @@ const admin = require('firebase-admin')
 admin.initializeApp()
 
 // ---- Push notification on new message ----
+// Sends to ALL devices the user is logged in on (iPhone + desktop etc.)
 exports.sendMessageNotification = onDocumentCreated('notifications/{notifId}', async (event) => {
   const data = event.data?.data()
   if (!data || data.type !== 'new_message') return null
@@ -13,31 +14,61 @@ exports.sendMessageNotification = onDocumentCreated('notifications/{notifId}', a
   const userDoc = await admin.firestore().collection('users').doc(data.toUid).get()
   if (!userDoc.exists) return null
 
-  const fcmToken = userDoc.data().fcmToken
-  if (!fcmToken) return null
+  const userData = userDoc.data()
 
-  const message = {
-    token: fcmToken,
-    notification: {
-      title: data.fromUsername,
-      body: data.message,
-    },
-    android: { priority: 'high' },
-    apns: { payload: { aps: { sound: 'default' } } },
+  // ✅ Support both old single token and new array of tokens
+  let tokens = []
+  if (userData.fcmTokens && Array.isArray(userData.fcmTokens)) {
+    tokens = userData.fcmTokens
+  } else if (userData.fcmToken) {
+    tokens = [userData.fcmToken]
   }
 
-  try {
-    await admin.messaging().send(message)
-  } catch (err) {
-    console.error('Error sending notification:', err)
+  if (tokens.length === 0) return null
+
+  const notification = {
+    title: data.fromUsername,
+    body: data.message,
+  }
+
+  // Send to all tokens, collect invalid ones to clean up
+  const invalidTokens = []
+  await Promise.all(
+    tokens.map(async (token) => {
+      try {
+        await admin.messaging().send({
+          token,
+          notification,
+          android: { priority: 'high' },
+          apns: { payload: { aps: { sound: 'default' } } },
+        })
+      } catch (err) {
+        // Token is invalid or expired — mark for removal
+        if (
+          err.code === 'messaging/invalid-registration-token' ||
+          err.code === 'messaging/registration-token-not-registered'
+        ) {
+          invalidTokens.push(token)
+        } else {
+          console.error('Error sending to token:', token, err)
+        }
+      }
+    })
+  )
+
+  // ✅ Clean up invalid tokens from Firestore
+  if (invalidTokens.length > 0) {
+    const validTokens = tokens.filter((t) => !invalidTokens.includes(t))
+    await admin.firestore().collection('users').doc(data.toUid).update({
+      fcmTokens: validTokens,
+    })
+    console.log(`Removed ${invalidTokens.length} invalid tokens for ${data.toUid}`)
   }
 
   return null
 })
 
 // ---- Mark message as delivered when created ----
-// Triggers on every new message, checks if recipient is online in RTDB
-// If online → mark delivered immediately
 exports.onMessageCreated = onDocumentCreated('messages/{messageId}', async (event) => {
   const message = event.data?.data()
   if (!message) return null
@@ -65,11 +96,9 @@ exports.onMessageCreated = onDocumentCreated('messages/{messageId}', async (even
 })
 
 // ---- When user comes online, mark all pending messages as delivered ----
-// Handles the case where messages were sent while the recipient was offline
 exports.onUserOnline = onValueWritten('/status/{uid}', async (event) => {
   const after = event.data.after.val()
 
-  // Only trigger when user comes online
   if (!after || after.online !== true) return null
 
   const uid = event.params.uid
@@ -103,7 +132,6 @@ exports.onUserOnline = onValueWritten('/status/{uid}', async (event) => {
 })
 
 // ---- Mark all unread messages in a chat as read ----
-// Called explicitly from the client when the recipient opens/focuses the chat
 exports.markMessagesAsRead = onCall(async (request) => {
   const { chatId } = request.data
   const uid = request.auth?.uid
