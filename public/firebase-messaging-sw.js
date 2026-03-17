@@ -12,10 +12,34 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging()
 
+// ✅ Handles background messages for Android/desktop
 messaging.onBackgroundMessage((payload) => {
   const { title, body } = payload.notification
   self.registration.showNotification(title, {
     body,
     icon: '/pwa-192x192.png',
+    badge: '/pwa-192x192.png',
   })
+})
+
+// ✅ Handles push events directly — required for iOS PWA
+self.addEventListener('push', (event) => {
+  let title = 'New message'
+  let body = ''
+
+  try {
+    const data = event.data?.json()
+    title = data?.notification?.title || data?.data?.title || title
+    body = data?.notification?.body || data?.data?.body || body
+  } catch (e) {
+    body = event.data?.text() || ''
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: '/pwa-192x192.png',
+      badge: '/pwa-192x192.png',
+    })
+  )
 })
